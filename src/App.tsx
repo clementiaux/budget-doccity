@@ -1,12 +1,11 @@
-import React, { useState, useMemo, useEffect } from 'react';
+// @ts-nocheck
+import React, { useState, useEffect } from 'react';
 import { Download, Edit2, Trash2, Plus, Settings, Save, X, Search, ArrowUpDown, LogOut, User } from 'lucide-react';
 import { initializeApp } from 'firebase/app';
-import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
+import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, doc, setDoc, updateDoc, deleteDoc, onSnapshot, collection, addDoc } from 'firebase/firestore';
 
-// @ts-ignore
-const envConfig = typeof __firebase_config !== 'undefined' ? __firebase_config : null;
-const providedConfig = {
+const firebaseConfig = {
   apiKey: "AIzaSyC8UXwghqNCTJc703ZICZj3-_yZ9t9PntY",
   authDomain: "budget-marseille.firebaseapp.com",
   projectId: "budget-marseille",
@@ -16,17 +15,14 @@ const providedConfig = {
   measurementId: "G-Z2TM6BVKER"
 };
 
-const firebaseConfig = envConfig ? JSON.parse(envConfig) : providedConfig;
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
-// @ts-ignore
-const appId = typeof __app_id !== 'undefined' ? __app_id : 'budget-marseille';
+const appId = 'budget-marseille';
 
 const formatCurrency = (val) => `${val.toLocaleString('fr-FR', { minimumFractionDigits: 0, maximumFractionDigits: 2 })} €`;
 const MONTHNAMES = ['Janvier', 'Février', 'Mars', 'Avril', 'Mai', 'Juin', 'Juillet', 'Août', 'Septembre', 'Octobre', 'Novembre', 'Décembre'];
 const SHORTMONTHS = ['JAN', 'FÉV', 'MAR', 'AVR', 'MAI', 'JUI', 'JUIL', 'AOÛ', 'SEP', 'OCT', 'NOV', 'DÉC'];
-const YEARS = [2026, 2027, 2028, 2029, 2030];
 
 const DEFAULT_ENVELOPES = [
   { id: 'Honoraires Exterieurs', name: 'Honoraires Exterieurs', allocatedAmount: 120000 },
@@ -61,47 +57,30 @@ const DEFAULT_SUB_CATEGORIES = {
 };
 
 export default function App() {
-  // Interface Auth states
   const [currentUser, setCurrentUser] = useState(null);
   const [loginEmail, setLoginEmail] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
   const [loginError, setLoginError] = useState(false);
-
-  // Cloud Auth & Loading states
   const [firebaseUser, setFirebaseUser] = useState(null);
   const [isDBReady, setIsDBReady] = useState(false);
-
-  // Users config states
   const [usersConfig, setUsersConfig] = useState({ users: [], pending: [] });
   const [isRegistering, setIsRegistering] = useState(false);
   const [regName, setRegName] = useState('');
   const [regEmail, setRegEmail] = useState('');
   const [regPassword, setRegPassword] = useState('');
   const [regSuccess, setRegSuccess] = useState(false);
+  const [activeTab, setActiveTab] = useState('saisie');
+  const [expenses, setExpenses] = useState([]);
+  const [envelopes, setEnvelopes] = useState([]);
+  const [subCategoriesMap, setSubCategoriesMap] = useState({});
 
   const allowedUsers = [
     { email: 'direction@doccity.fr', password: 'doccity2026', name: 'Direction', role: 'Administrateur' },
     { email: 'compta@doccity.fr', password: 'doccity2026', name: 'Service Comptabilité', role: 'Éditeur' }
   ];
 
-  const [activeTab, setActiveTab] = useState('saisie');
-  
-  // Database states
-  const [expenses, setExpenses] = useState([]);
-  const [envelopes, setEnvelopes] = useState([]);
-  const [subCategoriesMap, setSubCategoriesMap] = useState({});
-
   useEffect(() => {
-    const initAuth = async () => {
-      // @ts-ignore
-      if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-        // @ts-ignore
-        await signInWithCustomToken(auth, __initial_auth_token);
-      } else {
-        await signInAnonymously(auth);
-      }
-    };
-    initAuth();
+    signInAnonymously(auth);
     const unsubscribe = onAuthStateChanged(auth, setFirebaseUser);
     return () => unsubscribe();
   }, []);
@@ -109,7 +88,6 @@ export default function App() {
   useEffect(() => {
     if (!firebaseUser) return;
 
-    // Listen to Budget Configuration (Envelopes and SubCategories)
     const configRef = doc(db, 'artifacts', appId, 'public', 'data', 'config', 'budget_setup');
     const unsubConfig = onSnapshot(configRef, (docSnap) => {
       if (docSnap.exists()) {
@@ -118,20 +96,17 @@ export default function App() {
         setSubCategoriesMap(data.subCategoriesMap || {});
         setIsDBReady(true);
       } else {
-        // Initialize with default values on first launch
         setDoc(configRef, { envelopes: DEFAULT_ENVELOPES, subCategoriesMap: DEFAULT_SUB_CATEGORIES });
       }
-    }, (error) => console.error("Cloud Config Error:", error));
+    });
 
-    // Listen to Expenses
     const expensesRef = collection(db, 'artifacts', appId, 'public', 'data', 'expenses');
     const unsubExpenses = onSnapshot(expensesRef, (snapshot) => {
       const expData = [];
       snapshot.forEach(docSnap => expData.push({ id: docSnap.id, ...docSnap.data() }));
       setExpenses(expData);
-    }, (error) => console.error("Cloud Expenses Error:", error));
+    });
 
-    // Listen to Users (for custom auth and approval)
     const usersAuthRef = doc(db, 'artifacts', appId, 'public', 'data', 'config', 'users_auth');
     const unsubUsers = onSnapshot(usersAuthRef, (docSnap) => {
       if (docSnap.exists()) {
@@ -139,13 +114,9 @@ export default function App() {
       } else {
         setDoc(usersAuthRef, { users: [], pending: [] });
       }
-    }, (error) => console.error("Cloud Users Error:", error));
+    });
 
-    return () => {
-      unsubConfig();
-      unsubExpenses();
-      unsubUsers();
-    };
+    return () => { unsubConfig(); unsubExpenses(); unsubUsers(); };
   }, [firebaseUser]);
 
   const updateConfig = async (newEnvelopes, newMap) => {
@@ -162,7 +133,6 @@ export default function App() {
     const [sub, setSub] = useState(cat && subCategoriesMap[cat] ? subCategoriesMap[cat][0] : '');
     const [amount, setAmount] = useState('');
     const [editId, setEditId] = useState(null);
-
     const [filterCat, setFilterCat] = useState('');
     const [filterSub, setFilterSub] = useState('');
     const [minAmount, setMinAmount] = useState('');
@@ -173,9 +143,7 @@ export default function App() {
     const handleAddOrEdit = async (e) => {
       e.preventDefault();
       if (!desc || !amount || !date || !cat) return;
-      
       const payload = { date, description: desc, amount: parseFloat(amount), categoryId: cat, subCategory: sub };
-      
       if (editId) {
         await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'expenses', editId), payload);
         setEditId(null);
@@ -186,17 +154,14 @@ export default function App() {
     };
 
     const handleEditClick = (expense) => {
-      setDesc(expense.description);
-      setDate(expense.date);
-      setCat(expense.categoryId);
-      setSub(expense.subCategory);
-      setAmount(expense.amount);
-      setEditId(expense.id);
+      setDesc(expense.description); setDate(expense.date); setCat(expense.categoryId); setSub(expense.subCategory); setAmount(expense.amount); setEditId(expense.id);
       window.scrollTo({ top: 0, behavior: 'smooth' });
     };
 
     const handleDeleteClick = async (id) => {
-      await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'expenses', id));
+      if(window.confirm("Supprimer cette dépense ?")) {
+        await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'expenses', id));
+      }
     };
 
     let filtered = expenses.filter(ex => {
@@ -208,8 +173,7 @@ export default function App() {
     });
 
     filtered.sort((a, b) => {
-      let valA = a[sortField];
-      let valB = b[sortField];
+      let valA = a[sortField]; let valB = b[sortField];
       if (sortField === 'date') { valA = new Date(valA).getTime(); valB = new Date(valB).getTime(); }
       if (valA < valB) return sortOrder === 'asc' ? -1 : 1;
       if (valA > valB) return sortOrder === 'asc' ? 1 : -1;
@@ -222,12 +186,8 @@ export default function App() {
       const csvContent = [headers.join(';'), ...rows].join('\n');
       const blob = new Blob(["\uFEFF" + csvContent], { type: 'text/csv;charset=utf-8;' });
       const url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = "depenses.csv";
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
+      const link = document.createElement("a"); link.href = url; link.download = "depenses.csv";
+      document.body.appendChild(link); link.click(); document.body.removeChild(link);
     };
 
     return (
@@ -255,16 +215,15 @@ export default function App() {
         <div className="bg-white p-6 rounded-xl border shadow-sm">
           <div className="flex flex-col md:flex-row justify-between mb-4 gap-4 items-center">
             <h2 className="font-bold text-lg">Historique partagé des saisies</h2>
-            <button onClick={exportCSV} className="bg-green-100 text-green-700 px-4 py-2 rounded font-semibold flex items-center gap-2 hover:bg-green-200 transition-colors">
+            <button onClick={exportCSV} className="bg-green-100 text-green-700 px-4 py-2 rounded font-semibold flex items-center gap-2 hover:bg-green-200">
               <Download size={18} /> Exporter CSV
             </button>
           </div>
-
           <div className="bg-gray-50 p-4 rounded-lg mb-4 grid grid-cols-1 md:grid-cols-4 gap-4 border">
             <div>
               <label className="text-xs text-gray-500 font-semibold mb-1 block">Filtrer par Catégorie</label>
               <select className="border p-2 rounded w-full bg-white" value={filterCat} onChange={(e) => {setFilterCat(e.target.value); setFilterSub('');}}>
-                <option value="">Toutes les catégories</option>
+                <option value="">Toutes</option>
                 {envelopes.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}
               </select>
             </div>
@@ -275,48 +234,283 @@ export default function App() {
                 {filterCat && subCategoriesMap[filterCat]?.map(s => <option key={s} value={s}>{s}</option>)}
               </select>
             </div>
-            <div>
-              <label className="text-xs text-gray-500 font-semibold mb-1 block">Montant min (€)</label>
-              <input type="number" className="border p-2 rounded w-full bg-white" value={minAmount} onChange={(e) => setMinAmount(e.target.value)} />
-            </div>
-            <div>
-              <label className="text-xs text-gray-500 font-semibold mb-1 block">Montant max (€)</label>
-              <input type="number" className="border p-2 rounded w-full bg-white" value={maxAmount} onChange={(e) => setMaxAmount(e.target.value)} />
-            </div>
           </div>
-
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="bg-gray-100">
                 <tr>
-                  <th className="p-3 text-left cursor-pointer hover:bg-gray-200" onClick={() => { setSortField('date'); setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc'); }}>
-                    Date {sortField === 'date' && <ArrowUpDown size={14} className="inline" />}
-                  </th>
+                  <th className="p-3 text-left cursor-pointer hover:bg-gray-200" onClick={() => { setSortField('date'); setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc'); }}>Date</th>
                   <th className="p-3 text-left">Description</th>
-                  <th className="p-3 text-left">Catégorie & Sous-Catégorie</th>
-                  <th className="p-3 text-right cursor-pointer hover:bg-gray-200" onClick={() => { setSortField('amount'); setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc'); }}>
-                    Montant {sortField === 'amount' && <ArrowUpDown size={14} className="inline" />}
-                  </th>
+                  <th className="p-3 text-left">Catégorie</th>
+                  <th className="p-3 text-right cursor-pointer hover:bg-gray-200" onClick={() => { setSortField('amount'); setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc'); }}>Montant</th>
                   <th className="p-3 text-center">Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {filtered.map(ex => (
-                  <tr key={ex.id} className={`border-b hover:bg-gray-50 transition-colors ${editId === ex.id ? 'bg-blue-50' : ''}`}>
+                  <tr key={ex.id} className="border-b hover:bg-gray-50">
                     <td className="p-3 whitespace-nowrap">{new Date(ex.date).toLocaleDateString('fr-FR')}</td>
                     <td className="p-3">{ex.description}</td>
                     <td className="p-3 text-gray-600"><span className="font-semibold text-gray-800">{ex.categoryId}</span> <br/> {ex.subCategory}</td>
                     <td className="p-3 text-right font-medium">{formatCurrency(ex.amount)}</td>
                     <td className="p-3 text-center">
-                      <button onClick={() => handleEditClick(ex)} className="text-blue-600 p-1 mx-1 hover:bg-blue-100 rounded transition-colors"><Edit2 size={16} /></button>
-                      <button onClick={() => handleDeleteClick(ex.id)} className="text-red-600 p-1 mx-1 hover:bg-red-100 rounded transition-colors"><Trash2 size={16} /></button>
+                      <button onClick={() => handleEditClick(ex)} className="text-blue-600 p-1 mx-1 hover:bg-blue-100 rounded"><Edit2 size={16} /></button>
+                      <button onClick={() => handleDeleteClick(ex.id)} className="text-red-600 p-1 mx-1 hover:bg-red-100 rounded"><Trash2 size={16} /></button>
                     </td>
                   </tr>
                 ))}
-                {filtered.length === 0 && <tr><td colSpan="5" className="p-4 text-center text-gray-500">Aucune dépense trouvée avec ces filtres.</td></tr>}
               </tbody>
             </table>
           </div>
+        </div>
+      </div>
+    );
+  };
+
+  const SuiviTab = () => {
+    const [selectedMonths, setSelectedMonths] = useState([new Date().getMonth()]);
+    const toggleMonth = (mIndex) => {
+      if (selectedMonths.includes(mIndex)) {
+        if(selectedMonths.length > 1) setSelectedMonths(selectedMonths.filter(m => m !== mIndex));
+      } else { setSelectedMonths([...selectedMonths, mIndex]); }
+    };
+
+    const filteredExpenses = expenses.filter(ex => selectedMonths.includes(new Date(ex.date).getMonth()));
+    const monthRatio = selectedMonths.length / 12;
+    let totalBudget = 0; let totalSpent = 0;
+
+    const categoryStats = envelopes.map(env => {
+      const proratedBudget = env.allocatedAmount * monthRatio;
+      const spent = filteredExpenses.filter(ex => ex.categoryId === env.id).reduce((sum, ex) => sum + ex.amount, 0);
+      totalBudget += proratedBudget; totalSpent += spent;
+      return { ...env, proratedBudget, spent, remaining: proratedBudget - spent };
+    });
+
+    const subCatTotals = {};
+    filteredExpenses.forEach(ex => {
+      if(!subCatTotals[ex.subCategory]) subCatTotals[ex.subCategory] = 0;
+      subCatTotals[ex.subCategory] += ex.amount;
+    });
+
+    return (
+      <div className="space-y-6">
+        <div className="bg-white p-6 rounded-xl border shadow-sm">
+          <h2 className="font-bold text-xl mb-4">Sélection des mois</h2>
+          <div className="flex flex-wrap gap-2">
+            {SHORTMONTHS.map((m, i) => (
+              <button key={i} onClick={() => toggleMonth(i)} className={`px-4 py-2 rounded-full font-semibold text-sm border ${selectedMonths.includes(i) ? 'bg-blue-600 text-white' : 'bg-white text-gray-600'}`}>
+                {m}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          <div className="bg-white p-6 rounded-xl border shadow-sm flex flex-col justify-center items-center">
+            <p className="text-gray-500 font-semibold mb-1">Budget Alloué (Proratisé)</p>
+            <p className="text-3xl font-bold text-blue-600">{formatCurrency(totalBudget)}</p>
+          </div>
+          <div className="bg-white p-6 rounded-xl border shadow-sm flex flex-col justify-center items-center">
+            <p className="text-gray-500 font-semibold mb-1">Dépensé sur la période</p>
+            <p className="text-3xl font-bold text-red-500">{formatCurrency(totalSpent)}</p>
+          </div>
+          <div className="bg-white p-6 rounded-xl border shadow-sm flex flex-col justify-center items-center">
+            <p className="text-gray-500 font-semibold mb-1">Reste à allouer</p>
+            <p className={`text-3xl font-bold ${totalBudget - totalSpent >= 0 ? 'text-green-600' : 'text-red-600'}`}>{formatCurrency(totalBudget - totalSpent)}</p>
+          </div>
+        </div>
+        <div className="bg-white p-6 rounded-xl border shadow-sm">
+          <h2 className="font-bold text-lg mb-4">Suivi par Enveloppe</h2>
+          <div className="space-y-6">
+            {categoryStats.map(stat => {
+              const pct = stat.proratedBudget > 0 ? Math.min((stat.spent / stat.proratedBudget) * 100, 100) : (stat.spent > 0 ? 100 : 0);
+              return (
+                <div key={stat.id}>
+                  <div className="flex justify-between text-sm mb-1">
+                    <span className="font-semibold">{stat.name}</span>
+                    <span className="text-gray-600">{formatCurrency(stat.spent)} / {formatCurrency(stat.proratedBudget)}</span>
+                  </div>
+                  <div className="w-full bg-gray-200 rounded-full h-3">
+                    <div className={`h-3 rounded-full transition-all ${stat.spent > stat.proratedBudget ? 'bg-red-500' : 'bg-blue-500'}`} style={{ width: `${pct}%` }}></div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  const EnveloppesTab = () => {
+    const getMatrixData = () => {
+      const data = {};
+      envelopes.forEach(env => {
+        const monthly = Array(12).fill(0);
+        expenses.filter(ex => ex.categoryId === env.id).forEach(ex => { monthly[new Date(ex.date).getMonth()] += ex.amount; });
+        const cumulative = []; let sum = 0;
+        monthly.forEach(val => { sum += val; cumulative.push(sum); });
+        data[env.id] = { monthly, cumulative };
+      });
+      return data;
+    };
+    const matrixData = getMatrixData();
+    const lsEnvelopeIds = ['Lifesciences Services', 'Lifesciences Travaux (remboursable)'];
+    const lsEnvelopes = envelopes.filter(e => lsEnvelopeIds.includes(e.id));
+    const nonLSEnvelopes = envelopes.filter(e => !lsEnvelopeIds.includes(e.id));
+
+    const getRowTotals = (envList) => {
+      let totalPlafond = envList.reduce((sum, e) => sum + (e.allocatedAmount / 12), 0);
+      let monthlySum = Array(12).fill(0); let cumulativeSum = Array(12).fill(0);
+      envList.forEach(env => {
+        const d = matrixData[env.id];
+        for(let m = 0; m < 12; m++) { monthlySum[m] += d.monthly[m]; cumulativeSum[m] += d.cumulative[m]; }
+      });
+      return { totalPlafond, monthlySum, cumulativeSum };
+    };
+
+    const allTotals = getRowTotals(envelopes);
+
+    const exportMatrixCSV = () => {
+      let headers = ['Enveloppes', 'Plafond Mensuel'];
+      MONTHNAMES.forEach(m => headers.push(`${m} - Realisé`, `${m} - Cumul`, `${m} - Indicateur`));
+      const csvRows = [headers.join(';')];
+      envelopes.forEach(env => {
+        const row = [`"${env.name}"`, (env.allocatedAmount/12).toFixed(2)];
+        for (let m = 0; m < 12; m++) {
+          const spent = matrixData[env.id].monthly[m];
+          const cum = matrixData[env.id].cumulative[m];
+          const deltaCum = (env.allocatedAmount/12)*(m+1) - cum;
+          row.push(spent.toFixed(2), cum.toFixed(2), deltaCum.toFixed(2));
+        }
+        csvRows.push(row.join(';'));
+      });
+      const blob = new Blob(["\uFEFF" + csvRows.join('\n')], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a"); link.href = url; link.download = "matrice_enveloppes.csv";
+      document.body.appendChild(link); link.click(); document.body.removeChild(link);
+    };
+
+    return (
+      <div className="bg-white p-4 rounded-xl border shadow-sm">
+        <div className="flex justify-between items-center mb-4">
+          <h2 className="font-bold text-lg">Matrice Financière - Enveloppes 2026</h2>
+          <button onClick={exportMatrixCSV} className="bg-green-600 text-white px-4 py-2 rounded font-semibold"><Download size={18} className="inline mr-2"/> Exporter CSV</button>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs whitespace-nowrap border-collapse border border-gray-300">
+            <thead>
+              <tr className="bg-gray-100">
+                <th className="p-2 border border-gray-300 text-left">Enveloppes</th>
+                <th className="p-2 border border-gray-300 text-right">Plafond mensuel</th>
+                {MONTHNAMES.map(m => (
+                  <React.Fragment key={m}><th className="p-2 border">{m}</th><th className="p-2 border bg-gray-50">Cumul</th><th className="p-2 border">Indicateur</th></React.Fragment>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {envelopes.map(env => {
+                const plafond = env.allocatedAmount / 12;
+                return (
+                  <tr key={env.id} className="hover:bg-blue-50">
+                    <td className="p-2 border font-medium">{env.name}</td>
+                    <td className="p-2 border text-right">{plafond.toFixed(0)}</td>
+                    {Array(12).fill(0).map((_, m) => {
+                      const spent = matrixData[env.id].monthly[m];
+                      const cum = matrixData[env.id].cumulative[m];
+                      const deltaCum = (plafond * (m + 1)) - cum;
+                      return (
+                        <React.Fragment key={m}>
+                          <td className="p-2 border text-right">{spent === 0 ? '-' : spent.toFixed(0)}</td>
+                          <td className="p-2 border text-right bg-gray-50">{cum === 0 ? '-' : cum.toFixed(0)}</td>
+                          <td className={`p-2 border text-right font-bold ${deltaCum>=0?'text-green-600':'text-red-600'}`}>{deltaCum>0?'+':''}{deltaCum.toFixed(0)}</td>
+                        </React.Fragment>
+                      );
+                    })}
+                  </tr>
+                );
+              })}
+              <tr className="bg-blue-600 text-white font-bold">
+                <td className="p-2 border">Total Immeuble</td>
+                <td className="p-2 border text-right">{allTotals.totalPlafond.toFixed(0)}</td>
+                {Array(12).fill(0).map((_, m) => (
+                  <React.Fragment key={m}>
+                    <td className="p-2 border text-right">{allTotals.monthlySum[m].toFixed(0)}</td>
+                    <td className="p-2 border text-right bg-blue-700">{allTotals.cumulativeSum[m].toFixed(0)}</td>
+                    <td className="p-2 border text-right">-</td>
+                  </React.Fragment>
+                ))}
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    );
+  };
+
+  const ConfigurationTab = () => {
+    const [editingEnv, setEditingEnv] = useState(null);
+    const [tempEnvName, setTempEnvName] = useState('');
+    const [tempEnvAmount, setTempEnvAmount] = useState('');
+    const [tempSubs, setTempSubs] = useState([]);
+    const [newSubInput, setNewSubInput] = useState('');
+    const [newEnvName, setNewEnvName] = useState('');
+    const [newEnvAmount, setNewEnvAmount] = useState('');
+
+    const startEdit = (env) => { setEditingEnv(env.id); setTempEnvName(env.name); setTempEnvAmount(env.allocatedAmount); setTempSubs([...(subCategoriesMap[env.id] || [])]); };
+    const saveEdit = async () => {
+      const newEnvs = envelopes.map(e => e.id === editingEnv ? { ...e, name: tempEnvName, allocatedAmount: parseFloat(tempEnvAmount) } : e);
+      const newMap = { ...subCategoriesMap, [editingEnv]: tempSubs };
+      await updateConfig(newEnvs, newMap);
+      setEditingEnv(null);
+    };
+    const addSub = () => { if (newSubInput.trim() && !tempSubs.includes(newSubInput)) { setTempSubs([...tempSubs, newSubInput.trim()]); setNewSubInput(''); } };
+    const removeSub = (sub) => { setTempSubs(tempSubs.filter(s => s !== sub)); };
+    const deleteEnv = async (id) => {
+      if(window.confirm("Supprimer cette enveloppe ?")) {
+        const newEnvs = envelopes.filter(e => e.id !== id);
+        const newMap = {...subCategoriesMap}; delete newMap[id];
+        await updateConfig(newEnvs, newMap);
+      }
+    };
+    const createEnv = async (e) => {
+      e.preventDefault(); if(!newEnvName || !newEnvAmount) return;
+      const id = Date.now().toString();
+      const newEnvs = [...envelopes, { id, name: newEnvName, allocatedAmount: parseFloat(newEnvAmount) }];
+      const newMap = { ...subCategoriesMap, [id]: [] };
+      await updateConfig(newEnvs, newMap);
+      setNewEnvName(''); setNewEnvAmount('');
+    };
+
+    return (
+      <div className="space-y-6">
+        <form onSubmit={createEnv} className="bg-white p-6 rounded-xl border shadow-sm flex flex-col md:flex-row gap-4 items-end">
+          <div className="flex-1"><label className="text-sm font-bold mb-1 block">Nouvelle Enveloppe</label><input className="border p-2 rounded w-full" value={newEnvName} onChange={(e) => setNewEnvName(e.target.value)} required /></div>
+          <div className="flex-1"><label className="text-sm font-bold mb-1 block">Budget Annuel (€)</label><input className="border p-2 rounded w-full" type="number" value={newEnvAmount} onChange={(e) => setNewEnvAmount(e.target.value)} required /></div>
+          <button className="bg-blue-600 text-white px-6 py-2 rounded font-bold h-10">Créer</button>
+        </form>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          {envelopes.map(env => (
+            <div key={env.id} className="bg-white border rounded-xl p-5 shadow-sm relative">
+              {editingEnv === env.id ? (
+                <div className="space-y-4">
+                  <input className="border p-2 rounded w-full font-bold" value={tempEnvName} onChange={(e)=>setTempEnvName(e.target.value)} />
+                  <input className="border p-2 rounded w-full" type="number" value={tempEnvAmount} onChange={(e)=>setTempEnvAmount(e.target.value)} />
+                  <div className="bg-gray-50 p-2 rounded border">
+                    <p className="text-xs font-semibold mb-2">Sous-catégories :</p>
+                    <div className="flex flex-wrap gap-2 mb-2">{tempSubs.map(s => (<span key={s} className="bg-white border text-xs px-2 py-1 rounded flex items-center gap-1">{s} <button onClick={()=>removeSub(s)} className="text-red-500"><X size={12}/></button></span>))}</div>
+                    <div className="flex gap-2"><input className="border p-1 text-xs rounded flex-1" value={newSubInput} onChange={(e)=>setNewSubInput(e.target.value)} /><button type="button" onClick={addSub} className="bg-blue-600 text-white text-xs px-2 rounded">Ajouter</button></div>
+                  </div>
+                  <div className="flex justify-end gap-2 mt-4"><button onClick={()=>setEditingEnv(null)} className="px-3 py-1 bg-gray-200 rounded text-sm">Annuler</button><button onClick={saveEdit} className="px-3 py-1 bg-green-600 text-white rounded text-sm font-bold">Enregistrer</button></div>
+                </div>
+              ) : (
+                <>
+                  <div className="flex justify-between items-start mb-2"><h3 className="font-bold text-lg pr-8">{env.name}</h3><div className="flex gap-2 absolute top-4 right-4"><button onClick={()=>startEdit(env)} className="text-blue-600"><Edit2 size={16}/></button><button onClick={()=>deleteEnv(env.id)} className="text-red-600"><Trash2 size={16}/></button></div></div>
+                  <p className="text-blue-600 font-bold mb-4">{formatCurrency(env.allocatedAmount)} <span className="text-xs text-gray-400 font-normal">/ an</span></p>
+                  <div className="flex flex-wrap gap-1">{subCategoriesMap[env.id]?.map(s => (<span key={s} className="bg-gray-100 text-gray-600 text-xs px-2 py-1 rounded border">{s}</span>))}</div>
+                </>
+              )}
+            </div>
+          ))}
         </div>
       </div>
     );
@@ -324,110 +518,53 @@ export default function App() {
 
   const AdministrationTab = () => {
     if (currentUser?.role !== 'Administrateur') return <p>Accès refusé.</p>;
-
     const [userToDelete, setUserToDelete] = useState(null);
     const [requestToReject, setRequestToReject] = useState(null);
 
     const handleAccept = async (user) => {
       const newPending = usersConfig.pending.filter(u => u.email !== user.email);
       const newUsers = [...(usersConfig.users || []), { ...user, role: 'Éditeur' }];
-      await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'config', 'users_auth'), {
-        pending: newPending,
-        users: newUsers
-      });
+      await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'config', 'users_auth'), { pending: newPending, users: newUsers });
     };
 
     const executeReject = async (email) => {
-      const newPending = usersConfig.pending.filter(u => u.email !== email);
-      await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'config', 'users_auth'), {
-        pending: newPending
-      });
+      await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'config', 'users_auth'), { pending: usersConfig.pending.filter(u => u.email !== email) });
       setRequestToReject(null);
     };
 
     const executeDeleteUser = async (email) => {
-      const newUsers = usersConfig.users.filter(u => u.email !== email);
-      await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'config', 'users_auth'), {
-        users: newUsers
-      });
+      await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'config', 'users_auth'), { users: usersConfig.users.filter(u => u.email !== email) });
       setUserToDelete(null);
     };
 
     return (
       <div className="space-y-6">
         <div className="bg-white p-6 rounded-xl border shadow-sm">
-          <h2 className="font-bold text-lg mb-4 text-orange-600 flex items-center gap-2">
-            Demandes d'accès en attente ({usersConfig.pending?.length || 0})
-          </h2>
-          {usersConfig.pending?.length === 0 ? (
-            <p className="text-gray-500 text-sm">Aucune demande en attente.</p>
-          ) : (
-            <div className="space-y-3">
-              {usersConfig.pending?.map((u, i) => (
-                <div key={i} className="flex items-center justify-between bg-orange-50 p-4 rounded-lg border border-orange-100">
-                  <div>
-                    <p className="font-bold text-gray-800">{u.name}</p>
-                    <p className="text-sm text-gray-600">{u.email}</p>
-                    <p className="text-xs text-gray-400 mt-1">Date de demande : {u.requestDate}</p>
-                  </div>
-                  <div className="flex gap-2">
-                    {requestToReject === u.email ? (
-                      <>
-                        <button onClick={() => setRequestToReject(null)} className="px-3 py-1.5 text-sm bg-gray-200 text-gray-700 rounded font-semibold hover:bg-gray-300 transition-colors">Annuler</button>
-                        <button onClick={() => executeReject(u.email)} className="px-3 py-1.5 text-sm bg-red-600 text-white rounded font-bold hover:bg-red-700 transition-colors">Confirmer refus</button>
-                      </>
-                    ) : (
-                      <>
-                        <button onClick={() => setRequestToReject(u.email)} className="px-3 py-1.5 text-sm bg-white text-red-600 border border-red-200 rounded font-semibold hover:bg-red-50 transition-colors">Refuser</button>
-                        <button onClick={() => handleAccept(u)} className="px-3 py-1.5 text-sm bg-green-600 text-white rounded font-bold hover:bg-green-700 shadow-sm transition-colors">Accepter</button>
-                      </>
-                    )}
-                  </div>
+          <h2 className="font-bold text-lg mb-4 text-orange-600">Demandes en attente ({usersConfig.pending?.length || 0})</h2>
+          <div className="space-y-3">
+            {usersConfig.pending?.map((u, i) => (
+              <div key={i} className="flex items-center justify-between bg-orange-50 p-4 rounded-lg border">
+                <div><p className="font-bold">{u.name}</p><p className="text-sm">{u.email}</p></div>
+                <div className="flex gap-2">
+                  {requestToReject === u.email ? (
+                    <><button onClick={() => setRequestToReject(null)} className="px-3 py-1.5 text-sm bg-gray-200 rounded font-semibold">Annuler</button><button onClick={() => executeReject(u.email)} className="px-3 py-1.5 text-sm bg-red-600 text-white rounded font-bold">Confirmer refus</button></>
+                  ) : (
+                    <><button onClick={() => setRequestToReject(u.email)} className="px-3 py-1.5 text-sm text-red-600 border border-red-200 rounded font-semibold bg-white">Refuser</button><button onClick={() => handleAccept(u)} className="px-3 py-1.5 text-sm bg-green-600 text-white rounded font-bold">Accepter</button></>
+                  )}
                 </div>
-              ))}
-            </div>
-          )}
-        </div>
-
-        <div className="bg-white p-6 rounded-xl border shadow-sm">
-          <h2 className="font-bold text-lg mb-4 text-blue-900">Utilisateurs enregistrés et autorisés</h2>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm text-left">
-              <thead className="bg-gray-100">
-                <tr><th className="p-3">Nom</th><th className="p-3">Email</th><th className="p-3">Rôle</th><th className="p-3">Actions</th></tr>
-              </thead>
-              <tbody>
-                {/* Utilisateurs codés en dur */}
-                {allowedUsers.map(u => (
-                  <tr key={u.email} className="border-b bg-gray-50">
-                    <td className="p-3 font-semibold">{u.name}</td>
-                    <td className="p-3">{u.email}</td>
-                    <td className="p-3"><span className="bg-blue-100 text-blue-800 px-2 py-1 rounded text-xs font-bold">{u.role}</span></td>
-                    <td className="p-3 text-gray-400 text-xs italic">Compte système</td>
-                  </tr>
-                ))}
-                {/* Utilisateurs inscrits de la base de données */}
-                {usersConfig.users?.map((u, i) => (
-                  <tr key={i} className="border-b hover:bg-gray-50">
-                    <td className="p-3 font-semibold">{u.name}</td>
-                    <td className="p-3">{u.email}</td>
-                    <td className="p-3"><span className="bg-green-100 text-green-800 px-2 py-1 rounded text-xs font-bold">{u.role}</span></td>
-                    <td className="p-3">
-                      {userToDelete === u.email ? (
-                        <div className="flex items-center gap-2">
-                          <span className="text-xs text-red-600 font-bold">Confirmer ?</span>
-                          <button onClick={() => executeDeleteUser(u.email)} className="bg-red-600 text-white p-1 rounded hover:bg-red-700 transition-colors" title="Confirmer la suppression"><Trash2 size={16} /></button>
-                          <button onClick={() => setUserToDelete(null)} className="bg-gray-200 text-gray-700 p-1 rounded hover:bg-gray-300 transition-colors" title="Annuler"><X size={16} /></button>
-                        </div>
-                      ) : (
-                        <button onClick={() => setUserToDelete(u.email)} className="text-red-500 hover:text-red-700 p-1 bg-red-50 rounded transition-colors" title="Supprimer l'utilisateur"><Trash2 size={16} /></button>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+              </div>
+            ))}
           </div>
+        </div>
+        <div className="bg-white p-6 rounded-xl border shadow-sm">
+          <h2 className="font-bold text-lg mb-4 text-blue-900">Utilisateurs autorisés</h2>
+          <table className="w-full text-sm text-left">
+            <thead className="bg-gray-100"><tr><th className="p-3">Nom</th><th className="p-3">Email</th><th className="p-3">Rôle</th><th className="p-3">Actions</th></tr></thead>
+            <tbody>
+              {allowedUsers.map(u => (<tr key={u.email} className="border-b bg-gray-50"><td className="p-3 font-semibold">{u.name}</td><td className="p-3">{u.email}</td><td className="p-3 font-bold text-blue-800">{u.role}</td><td className="p-3 italic text-gray-400">Système</td></tr>))}
+              {usersConfig.users?.map((u, i) => (<tr key={i} className="border-b hover:bg-gray-50"><td className="p-3 font-semibold">{u.name}</td><td className="p-3">{u.email}</td><td className="p-3 font-bold text-green-800">{u.role}</td><td className="p-3">{userToDelete === u.email ? (<div className="flex gap-2"><span className="text-xs text-red-600 font-bold">Confirmer?</span><button onClick={() => executeDeleteUser(u.email)} className="bg-red-600 text-white p-1 rounded"><Trash2 size={16} /></button><button onClick={() => setUserToDelete(null)} className="bg-gray-200 p-1 rounded"><X size={16} /></button></div>) : (<button onClick={() => setUserToDelete(u.email)} className="text-red-500 hover:text-red-700 p-1 bg-red-50 rounded"><Trash2 size={16} /></button>)}</td></tr>))}
+            </tbody>
+          </table>
         </div>
       </div>
     );
@@ -435,119 +572,27 @@ export default function App() {
 
   if (!currentUser) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-blue-50 to-gray-100 flex items-center justify-center p-4 font-sans text-gray-800">
-        <div className="bg-white p-8 rounded-2xl shadow-xl max-w-sm w-full border border-gray-100 relative overflow-hidden">
-          <div className="absolute top-0 left-0 w-full h-2 bg-blue-600"></div>
-          <div className="text-center mb-8 mt-2">
-            <div className="bg-blue-50 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4 shadow-sm border border-blue-100">
-              <User size={32} className="text-blue-600" />
-            </div>
-            <h1 className="text-2xl font-extrabold text-blue-900 tracking-tight mb-1">Doccity Budget</h1>
-            <p className="text-gray-500 text-sm">Espace collaboratif partagé</p>
-          </div>
-
+      <div className="min-h-screen bg-gradient-to-br from-blue-50 to-gray-100 flex items-center justify-center p-4">
+        <div className="bg-white p-8 rounded-2xl shadow-xl max-w-sm w-full border-t-8 border-t-blue-600">
+          <div className="text-center mb-8"><User size={48} className="text-blue-600 mx-auto mb-4" /><h1 className="text-2xl font-extrabold text-blue-900">Doccity Budget</h1></div>
           {!isRegistering ? (
-            <>
-              <form onSubmit={(e) => {
-                e.preventDefault();
-                // Combiner les utilisateurs système et les utilisateurs base de données
-                const allUsers = [...allowedUsers, ...(usersConfig.users || [])];
-                const user = allUsers.find(u => u.email.toLowerCase() === loginEmail.toLowerCase().trim() && u.password === loginPassword);
-                
-                if (user) {
-                  setCurrentUser(user);
-                  setLoginError(false);
-                  setLoginPassword(''); 
-                } else {
-                  setLoginError(true);
-                }
-              }} className="space-y-4">
-                <div>
-                  <input
-                    type="email"
-                    placeholder="Adresse email"
-                    className={`w-full p-3 border rounded-xl outline-none focus:ring-2 focus:ring-blue-600 transition-all mb-4 shadow-sm ${loginError ? 'border-red-500 bg-red-50' : 'border-gray-200 bg-gray-50'}`}
-                    value={loginEmail}
-                    onChange={(e) => setLoginEmail(e.target.value)}
-                    required
-                    autoFocus
-                  />
-                  <input
-                    type="password"
-                    placeholder="Mot de passe"
-                    className={`w-full p-3 border rounded-xl outline-none focus:ring-2 focus:ring-blue-600 transition-all shadow-sm ${loginError ? 'border-red-500 bg-red-50' : 'border-gray-200 bg-gray-50'}`}
-                    value={loginPassword}
-                    onChange={(e) => setLoginPassword(e.target.value)}
-                    required
-                  />
-                  {loginError && <p className="text-red-500 text-xs mt-3 font-semibold text-center bg-red-50 p-2 rounded">Email ou mot de passe incorrect</p>}
-                </div>
-                <button type="submit" className="w-full bg-blue-600 text-white font-bold py-3.5 rounded-xl hover:bg-blue-700 transition-colors shadow-md hover:shadow-lg active:scale-[0.98]">
-                  Se connecter
-                </button>
-              </form>
-              
-              <div className="mt-6 text-center">
-                <button onClick={() => { setIsRegistering(true); setRegSuccess(false); }} className="text-sm font-semibold text-blue-600 hover:underline">
-                  Demander un accès (Nouvel utilisateur)
-                </button>
-              </div>
-
-              <div className="mt-8 pt-6 border-t border-gray-100 text-xs text-gray-500 flex flex-col gap-2">
-                <p className="font-semibold text-center text-gray-600 mb-1">Comptes d'administration :</p>
-                <div className="bg-gray-50 p-2.5 rounded-lg border border-gray-100 flex justify-between">
-                  <span className="font-medium">direction@doccity.fr</span>
-                  <span>doccity2026</span>
-                </div>
-              </div>
-            </>
+            <form onSubmit={(e) => { e.preventDefault(); const user = [...allowedUsers, ...(usersConfig.users || [])].find(u => u.email.toLowerCase() === loginEmail.toLowerCase().trim() && u.password === loginPassword); if (user) { setCurrentUser(user); setLoginError(false); } else setLoginError(true); }} className="space-y-4">
+              <input type="email" placeholder="Email" className="w-full p-3 border rounded-xl bg-gray-50" value={loginEmail} onChange={(e) => setLoginEmail(e.target.value)} required autoFocus />
+              <input type="password" placeholder="Mot de passe" className="w-full p-3 border rounded-xl bg-gray-50" value={loginPassword} onChange={(e) => setLoginPassword(e.target.value)} required />
+              {loginError && <p className="text-red-500 text-xs text-center font-bold">Identifiants incorrects</p>}
+              <button className="w-full bg-blue-600 text-white font-bold py-3 rounded-xl hover:bg-blue-700 shadow-md">Se connecter</button>
+              <button type="button" onClick={() => setIsRegistering(true)} className="w-full text-sm font-semibold text-blue-600 hover:underline mt-4">Demander un accès</button>
+            </form>
           ) : (
             <div className="space-y-4">
               {regSuccess ? (
-                <div className="bg-green-50 border border-green-200 text-green-700 p-4 rounded-xl text-center text-sm font-medium">
-                  Demande envoyée avec succès ! <br/><br/>
-                  L'administrateur a été notifié par email. Vous pourrez vous connecter dès que votre compte sera validé.
-                  <button onClick={() => setIsRegistering(false)} className="mt-4 w-full bg-white border border-green-300 text-green-700 py-2 rounded-lg font-bold hover:bg-green-100">
-                    Retour à la connexion
-                  </button>
-                </div>
+                <div className="bg-green-50 text-green-700 p-4 rounded-xl text-center text-sm font-medium">Demande envoyée à l'administrateur ! <button onClick={() => setIsRegistering(false)} className="mt-4 w-full bg-white border border-green-300 py-2 rounded-lg font-bold">Retour</button></div>
               ) : (
-                <form onSubmit={async (e) => {
-                  e.preventDefault();
-                  if (!regName || !regEmail || !regPassword) return;
-                  
-                  // Ajouter à la liste d'attente sur Firestore
-                  const newPending = [...(usersConfig.pending || []), { 
-                    name: regName, 
-                    email: regEmail.toLowerCase().trim(), 
-                    password: regPassword,
-                    requestDate: new Date().toLocaleDateString('fr-FR')
-                  }];
-                  await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'config', 'users_auth'), {
-                    pending: newPending
-                  });
-
-                  setRegSuccess(true);
-                  
-                  // Préparer l'email pour notifier l'administrateur
-                  const subject = encodeURIComponent("Nouvelle demande d'accès - Doccity Budget");
-                  const body = encodeURIComponent(`Bonjour,\n\nUne nouvelle personne souhaite accéder à l'application Doccity Budget :\n\nNom : ${regName}\nEmail : ${regEmail}\n\nMerci de vous connecter sur l'application avec le compte direction@doccity.fr et de vous rendre dans le nouvel onglet "Administration" pour valider ou refuser cet accès.\n\nCordialement.`);
-                  window.location.href = `mailto:l.clementiaux@doc-city.fr?subject=${subject}&body=${body}`;
-                  
-                }} className="space-y-4">
-                  <p className="text-sm text-gray-600 text-center mb-4 font-medium">Veuillez remplir ce formulaire. L'administrateur devra valider votre compte.</p>
-                  <input type="text" placeholder="Nom complet" className="w-full p-3 border rounded-xl outline-none focus:ring-2 focus:ring-blue-600 bg-gray-50" value={regName} onChange={(e) => setRegName(e.target.value)} required />
-                  <input type="email" placeholder="Adresse email" className="w-full p-3 border rounded-xl outline-none focus:ring-2 focus:ring-blue-600 bg-gray-50" value={regEmail} onChange={(e) => setRegEmail(e.target.value)} required />
-                  <input type="password" placeholder="Créer un mot de passe" className="w-full p-3 border rounded-xl outline-none focus:ring-2 focus:ring-blue-600 bg-gray-50" value={regPassword} onChange={(e) => setRegPassword(e.target.value)} required />
-                  
-                  <div className="flex gap-2 pt-2">
-                    <button type="button" onClick={() => setIsRegistering(false)} className="flex-1 bg-gray-100 text-gray-700 font-bold py-3 rounded-xl hover:bg-gray-200 transition-colors">
-                      Annuler
-                    </button>
-                    <button type="submit" className="flex-1 bg-blue-600 text-white font-bold py-3 rounded-xl hover:bg-blue-700 transition-colors shadow-md">
-                      Envoyer demande
-                    </button>
-                  </div>
+                <form onSubmit={async (e) => { e.preventDefault(); await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'config', 'users_auth'), { pending: [...(usersConfig.pending || []), { name: regName, email: regEmail.toLowerCase().trim(), password: regPassword, requestDate: new Date().toLocaleDateString('fr-FR') }] }); setRegSuccess(true); window.location.href = `mailto:l.clementiaux@doc-city.fr?subject=Nouvel Acces Doccity Budget&body=Demande de ${regName}`; }} className="space-y-4">
+                  <input type="text" placeholder="Nom" className="w-full p-3 border rounded-xl bg-gray-50" value={regName} onChange={(e) => setRegName(e.target.value)} required />
+                  <input type="email" placeholder="Email" className="w-full p-3 border rounded-xl bg-gray-50" value={regEmail} onChange={(e) => setRegEmail(e.target.value)} required />
+                  <input type="password" placeholder="Mot de passe" className="w-full p-3 border rounded-xl bg-gray-50" value={regPassword} onChange={(e) => setRegPassword(e.target.value)} required />
+                  <div className="flex gap-2"><button type="button" onClick={() => setIsRegistering(false)} className="flex-1 bg-gray-200 font-bold py-3 rounded-xl">Annuler</button><button type="submit" className="flex-1 bg-blue-600 text-white font-bold py-3 rounded-xl">Envoyer</button></div>
                 </form>
               )}
             </div>
@@ -557,46 +602,14 @@ export default function App() {
     );
   }
 
-  // Waiting for cloud data to sync
-  if (!isDBReady) {
-    return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
-        <div className="flex flex-col items-center text-blue-600 bg-white p-8 rounded-2xl shadow-sm border">
-          <div className="animate-spin rounded-full h-10 w-10 border-4 border-gray-200 border-t-blue-600 mb-4"></div>
-          <p className="font-bold text-gray-700">Synchronisation avec le Cloud...</p>
-        </div>
-      </div>
-    );
-  }
+  if (!isDBReady) return <div className="min-h-screen bg-gray-50 flex items-center justify-center"><div className="animate-spin rounded-full h-10 w-10 border-4 border-gray-200 border-t-blue-600"></div></div>;
 
   return (
     <div className="min-h-screen bg-gray-50 p-6 font-sans text-gray-800">
       <div className="max-w-[1400px] mx-auto">
-        <header className="mb-8 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
-          <div>
-            <h1 className="text-3xl font-extrabold text-blue-900 tracking-tight mb-1 flex items-center gap-3">
-              Doccity Budget 
-              <span className="bg-green-100 text-green-700 text-xs px-2 py-1 rounded-full font-bold border border-green-200 flex items-center gap-1">
-                <span className="w-2 h-2 rounded-full bg-green-500"></span> Cloud Actif
-              </span>
-            </h1>
-            <p className="text-gray-500 font-medium">Tableau de bord de gestion financière partagé</p>
-          </div>
-          
-          <div className="bg-gray-50 px-5 py-3 rounded-xl border border-gray-200 flex items-center gap-4">
-            <div className="text-right">
-              <p className="text-sm font-bold text-gray-800">{currentUser.name}</p>
-              <p className="text-xs text-blue-600 font-semibold">{currentUser.role}</p>
-            </div>
-            <div className="w-px h-8 bg-gray-300"></div>
-            <button 
-              onClick={() => setCurrentUser(null)} 
-              className="text-gray-500 hover:text-red-600 p-2 rounded-full hover:bg-red-50 transition-colors"
-              title="Se déconnecter"
-            >
-              <LogOut size={20} />
-            </button>
-          </div>
+        <header className="mb-8 flex justify-between items-center bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
+          <div><h1 className="text-3xl font-extrabold text-blue-900 tracking-tight">Doccity Budget <span className="bg-green-100 text-green-700 text-xs px-2 py-1 rounded-full font-bold ml-2">Cloud Actif</span></h1><p className="text-gray-500 font-medium">Tableau de bord de gestion financière partagé</p></div>
+          <div className="bg-gray-50 px-5 py-3 rounded-xl border flex items-center gap-4"><div className="text-right"><p className="text-sm font-bold">{currentUser.name}</p><p className="text-xs text-blue-600 font-semibold">{currentUser.role}</p></div><button onClick={() => setCurrentUser(null)} className="text-gray-500 hover:text-red-600 p-2"><LogOut size={20} /></button></div>
         </header>
 
         <nav className="flex gap-3 mb-6 overflow-x-auto pb-2 scrollbar-hide">
@@ -607,21 +620,11 @@ export default function App() {
             { id: 'configuration', label: 'Configuration', icon: <Settings size={18} /> },
             ...(currentUser.role === 'Administrateur' ? [{ id: 'admin', label: 'Administration', icon: <User size={18} /> }] : [])
           ].map(t => (
-            <button 
-              key={t.id} 
-              onClick={() => setActiveTab(t.id)} 
-              className={`flex items-center gap-2 whitespace-nowrap px-6 py-3.5 rounded-xl font-bold transition-all shadow-sm ${
-                activeTab === t.id 
-                ? 'bg-blue-700 text-white shadow-md' 
-                : 'bg-white text-gray-600 border border-gray-200 hover:bg-blue-50 hover:text-blue-700'
-              }`}
-            >
-              {t.icon} {t.label}
-            </button>
+            <button key={t.id} onClick={() => setActiveTab(t.id)} className={`flex items-center gap-2 whitespace-nowrap px-6 py-3.5 rounded-xl font-bold transition-all shadow-sm ${activeTab === t.id ? 'bg-blue-700 text-white shadow-md' : 'bg-white text-gray-600 border hover:bg-blue-50'}`}>{t.icon} {t.label}</button>
           ))}
         </nav>
 
-        <main className="transition-all duration-300 ease-in-out">
+        <main className="transition-all duration-300">
           {activeTab === 'saisie' && <SaisieTab />}
           {activeTab === 'suivi' && <SuiviTab />}
           {activeTab === 'enveloppes' && <EnveloppesTab />}
