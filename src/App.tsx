@@ -1,6 +1,6 @@
 // @ts-nocheck
 import React, { useState, useEffect } from 'react';
-import { Download, Edit2, Trash2, Plus, Settings, Save, X, Search, ArrowUpDown, LogOut, User } from 'lucide-react';
+import { Download, Edit2, Trash2, Plus, Settings, Save, X, Search, ArrowUpDown, LogOut, User, Calendar } from 'lucide-react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, doc, setDoc, updateDoc, deleteDoc, onSnapshot, collection, addDoc } from 'firebase/firestore';
@@ -23,6 +23,7 @@ const appId = 'budget-marseille';
 const formatCurrency = (val) => `${val.toLocaleString('fr-FR', { minimumFractionDigits: 0, maximumFractionDigits: 2 })} €`;
 const MONTHNAMES = ['Janvier', 'Février', 'Mars', 'Avril', 'Mai', 'Juin', 'Juillet', 'Août', 'Septembre', 'Octobre', 'Novembre', 'Décembre'];
 const SHORTMONTHS = ['JAN', 'FÉV', 'MAR', 'AVR', 'MAI', 'JUI', 'JUIL', 'AOÛ', 'SEP', 'OCT', 'NOV', 'DÉC'];
+const YEARS = [2026, 2027, 2028, 2029, 2030];
 
 const DEFAULT_ENVELOPES = [
   { id: 'Honoraires Exterieurs', name: 'Honoraires Exterieurs', allocatedAmount: 120000 },
@@ -69,13 +70,16 @@ export default function App() {
   const [regEmail, setRegEmail] = useState('');
   const [regPassword, setRegPassword] = useState('');
   const [regSuccess, setRegSuccess] = useState(false);
+  
   const [activeTab, setActiveTab] = useState('saisie');
+  const [selectedYear, setSelectedYear] = useState(2026); // Global Year State
+  
   const [expenses, setExpenses] = useState([]);
   const [envelopes, setEnvelopes] = useState([]);
   const [subCategoriesMap, setSubCategoriesMap] = useState({});
 
   const allowedUsers = [
-    { email: 'direction@doccity.fr', password: 'doccity2026', name: 'Direction', role: 'Administrateur' },
+    { email: 'finance@doc-city.fr', password: 'Doccityviton2026', name: 'Direction', role: 'Administrateur' },
     { email: 'compta@doccity.fr', password: 'doccity2026', name: 'Service Comptabilité', role: 'Éditeur' }
   ];
 
@@ -164,7 +168,9 @@ export default function App() {
       }
     };
 
+    // Filtre global par année + filtres locaux
     let filtered = expenses.filter(ex => {
+      if (new Date(ex.date).getFullYear() !== selectedYear) return false;
       if (filterCat && ex.categoryId !== filterCat) return false;
       if (filterSub && ex.subCategory !== filterSub) return false;
       if (minAmount && ex.amount < parseFloat(minAmount)) return false;
@@ -186,7 +192,7 @@ export default function App() {
       const csvContent = [headers.join(';'), ...rows].join('\n');
       const blob = new Blob(["\uFEFF" + csvContent], { type: 'text/csv;charset=utf-8;' });
       const url = URL.createObjectURL(blob);
-      const link = document.createElement("a"); link.href = url; link.download = "depenses.csv";
+      const link = document.createElement("a"); link.href = url; link.download = `depenses_${selectedYear}.csv`;
       document.body.appendChild(link); link.click(); document.body.removeChild(link);
     };
 
@@ -214,7 +220,7 @@ export default function App() {
 
         <div className="bg-white p-6 rounded-xl border shadow-sm">
           <div className="flex flex-col md:flex-row justify-between mb-4 gap-4 items-center">
-            <h2 className="font-bold text-lg">Historique partagé des saisies</h2>
+            <h2 className="font-bold text-lg">Historique partagé des saisies ({selectedYear})</h2>
             <button onClick={exportCSV} className="bg-green-100 text-green-700 px-4 py-2 rounded font-semibold flex items-center gap-2 hover:bg-green-200">
               <Download size={18} /> Exporter CSV
             </button>
@@ -259,6 +265,7 @@ export default function App() {
                     </td>
                   </tr>
                 ))}
+                {filtered.length === 0 && <tr><td colSpan="5" className="p-4 text-center text-gray-500 italic">Aucune dépense trouvée pour {selectedYear}.</td></tr>}
               </tbody>
             </table>
           </div>
@@ -275,35 +282,44 @@ export default function App() {
       } else { setSelectedMonths([...selectedMonths, mIndex]); }
     };
 
-    const filteredExpenses = expenses.filter(ex => selectedMonths.includes(new Date(ex.date).getMonth()));
+    // Filter by months AND globally selected year
+    const filteredExpenses = expenses.filter(ex => 
+      selectedMonths.includes(new Date(ex.date).getMonth()) && 
+      new Date(ex.date).getFullYear() === selectedYear
+    );
+    
     const monthRatio = selectedMonths.length / 12;
     let totalBudget = 0; let totalSpent = 0;
 
     const categoryStats = envelopes.map(env => {
       const proratedBudget = env.allocatedAmount * monthRatio;
-      const spent = filteredExpenses.filter(ex => ex.categoryId === env.id).reduce((sum, ex) => sum + ex.amount, 0);
-      totalBudget += proratedBudget; totalSpent += spent;
-      return { ...env, proratedBudget, spent, remaining: proratedBudget - spent };
-    });
+      const envExpenses = filteredExpenses.filter(ex => ex.categoryId === env.id);
+      const spent = envExpenses.reduce((sum, ex) => sum + ex.amount, 0);
+      
+      // Calculate sub-category totals for this envelope
+      const subCatTotals = {};
+      envExpenses.forEach(ex => {
+        if(!subCatTotals[ex.subCategory]) subCatTotals[ex.subCategory] = 0;
+        subCatTotals[ex.subCategory] += ex.amount;
+      });
 
-    const subCatTotals = {};
-    filteredExpenses.forEach(ex => {
-      if(!subCatTotals[ex.subCategory]) subCatTotals[ex.subCategory] = 0;
-      subCatTotals[ex.subCategory] += ex.amount;
+      totalBudget += proratedBudget; totalSpent += spent;
+      return { ...env, proratedBudget, spent, remaining: proratedBudget - spent, subCatTotals };
     });
 
     return (
       <div className="space-y-6">
         <div className="bg-white p-6 rounded-xl border shadow-sm">
-          <h2 className="font-bold text-xl mb-4">Sélection des mois</h2>
+          <h2 className="font-bold text-xl mb-4 flex items-center gap-2"><Calendar size={20} className="text-blue-600"/> Sélection des mois de {selectedYear}</h2>
           <div className="flex flex-wrap gap-2">
             {SHORTMONTHS.map((m, i) => (
-              <button key={i} onClick={() => toggleMonth(i)} className={`px-4 py-2 rounded-full font-semibold text-sm border ${selectedMonths.includes(i) ? 'bg-blue-600 text-white' : 'bg-white text-gray-600'}`}>
+              <button key={i} onClick={() => toggleMonth(i)} className={`px-4 py-2 rounded-full font-semibold text-sm border ${selectedMonths.includes(i) ? 'bg-blue-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-100'}`}>
                 {m}
               </button>
             ))}
           </div>
         </div>
+        
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
           <div className="bg-white p-6 rounded-xl border shadow-sm flex flex-col justify-center items-center">
             <p className="text-gray-500 font-semibold mb-1">Budget Alloué (Proratisé)</p>
@@ -318,20 +334,37 @@ export default function App() {
             <p className={`text-3xl font-bold ${totalBudget - totalSpent >= 0 ? 'text-green-600' : 'text-red-600'}`}>{formatCurrency(totalBudget - totalSpent)}</p>
           </div>
         </div>
+
         <div className="bg-white p-6 rounded-xl border shadow-sm">
-          <h2 className="font-bold text-lg mb-4">Suivi par Enveloppe</h2>
-          <div className="space-y-6">
+          <h2 className="font-bold text-lg mb-6">Suivi par Enveloppe et Sous-catégories</h2>
+          <div className="space-y-8">
             {categoryStats.map(stat => {
               const pct = stat.proratedBudget > 0 ? Math.min((stat.spent / stat.proratedBudget) * 100, 100) : (stat.spent > 0 ? 100 : 0);
+              const subCatsPresent = Object.keys(stat.subCatTotals).length > 0;
+
               return (
-                <div key={stat.id}>
+                <div key={stat.id} className="mb-4">
                   <div className="flex justify-between text-sm mb-1">
-                    <span className="font-semibold">{stat.name}</span>
-                    <span className="text-gray-600">{formatCurrency(stat.spent)} / {formatCurrency(stat.proratedBudget)}</span>
+                    <span className="font-bold text-gray-800">{stat.name}</span>
+                    <span className="text-gray-600 font-semibold">{formatCurrency(stat.spent)} / {formatCurrency(stat.proratedBudget)}</span>
                   </div>
-                  <div className="w-full bg-gray-200 rounded-full h-3">
+                  <div className="w-full bg-gray-200 rounded-full h-3 mb-2">
                     <div className={`h-3 rounded-full transition-all ${stat.spent > stat.proratedBudget ? 'bg-red-500' : 'bg-blue-500'}`} style={{ width: `${pct}%` }}></div>
                   </div>
+                  
+                  {subCatsPresent && (
+                    <div className="flex flex-wrap gap-2 mt-3 ml-2 border-l-2 border-gray-200 pl-3">
+                      {Object.entries(stat.subCatTotals).sort((a,b)=>b[1]-a[1]).map(([subName, subTotal]) => {
+                         const subPct = stat.spent > 0 ? ((subTotal / stat.spent) * 100).toFixed(1) : 0;
+                         return (
+                           <div key={subName} className="text-xs bg-gray-50 border border-gray-200 px-3 py-1.5 rounded-md text-gray-600 shadow-sm flex items-center gap-2">
+                              <span className="uppercase">{subName}</span>
+                              <span className="font-bold text-gray-900 bg-white px-2 py-0.5 rounded border">{formatCurrency(subTotal)} ({subPct}%)</span>
+                           </div>
+                         );
+                      })}
+                    </div>
+                  )}
                 </div>
               );
             })}
@@ -346,17 +379,18 @@ export default function App() {
       const data = {};
       envelopes.forEach(env => {
         const monthly = Array(12).fill(0);
-        expenses.filter(ex => ex.categoryId === env.id).forEach(ex => { monthly[new Date(ex.date).getMonth()] += ex.amount; });
+        // Filtre les dépenses pour cette enveloppe ET pour l'année sélectionnée
+        expenses.filter(ex => ex.categoryId === env.id && new Date(ex.date).getFullYear() === selectedYear).forEach(ex => { 
+          monthly[new Date(ex.date).getMonth()] += ex.amount; 
+        });
         const cumulative = []; let sum = 0;
         monthly.forEach(val => { sum += val; cumulative.push(sum); });
         data[env.id] = { monthly, cumulative };
       });
       return data;
     };
+    
     const matrixData = getMatrixData();
-    const lsEnvelopeIds = ['Lifesciences Services', 'Lifesciences Travaux (remboursable)'];
-    const lsEnvelopes = envelopes.filter(e => lsEnvelopeIds.includes(e.id));
-    const nonLSEnvelopes = envelopes.filter(e => !lsEnvelopeIds.includes(e.id));
 
     const getRowTotals = (envList) => {
       let totalPlafond = envList.reduce((sum, e) => sum + (e.allocatedAmount / 12), 0);
@@ -384,16 +418,51 @@ export default function App() {
         }
         csvRows.push(row.join(';'));
       });
+      
+      // Ligne Total Immeuble
+      let rowTotal = ['"Total Immeuble"', allTotals.totalPlafond.toFixed(2)];
+      for(let m = 0; m < 12; m++) {
+        rowTotal.push(allTotals.monthlySum[m].toFixed(2), allTotals.cumulativeSum[m].toFixed(2), '-');
+      }
+      csvRows.push(rowTotal.join(';'));
+
+      // Nouvelles Lignes de Synthèse
+      let rowObj = ['"Budget Mensuel objectif"', '-'];
+      let rowDelta = ['"Delta Mensuel ( Rea VS Obj )"', '-'];
+      let rowSuivi = ['"Suivi Mensuel ( Euros )"', '-'];
+      let rowShare = ['"Share Mensuel ( % )"', '-'];
+      
+      const totalAnnuel = allTotals.cumulativeSum[11] || 1;
+      
+      for(let m = 0; m < 12; m++) {
+        const obj = allTotals.totalPlafond;
+        const cumObj = obj * (m+1);
+        const real = allTotals.monthlySum[m];
+        const cumReal = allTotals.cumulativeSum[m];
+        
+        const deltaPct = obj > 0 ? ((real - obj) / obj) * 100 : 0;
+        const cumDeltaPct = cumObj > 0 ? ((cumReal - cumObj) / cumObj) * 100 : 0;
+        const sharePct = (real / totalAnnuel) * 100;
+        const cumSharePct = (cumReal / totalAnnuel) * 100;
+        
+        rowObj.push(obj.toFixed(2), cumObj.toFixed(2), '-');
+        rowDelta.push(`"${deltaPct.toFixed(1)}%"`, `"${cumDeltaPct.toFixed(1)}%"`, '-');
+        rowSuivi.push(obj.toFixed(2), cumObj.toFixed(2), '-');
+        rowShare.push(`"${sharePct.toFixed(1)}%"`, `"${cumSharePct.toFixed(1)}%"`, '-');
+      }
+      
+      csvRows.push(rowObj.join(';'), rowDelta.join(';'), rowSuivi.join(';'), rowShare.join(';'));
+
       const blob = new Blob(["\uFEFF" + csvRows.join('\n')], { type: 'text/csv;charset=utf-8;' });
       const url = URL.createObjectURL(blob);
-      const link = document.createElement("a"); link.href = url; link.download = "matrice_enveloppes.csv";
+      const link = document.createElement("a"); link.href = url; link.download = `matrice_enveloppes_${selectedYear}.csv`;
       document.body.appendChild(link); link.click(); document.body.removeChild(link);
     };
 
     return (
       <div className="bg-white p-4 rounded-xl border shadow-sm">
         <div className="flex justify-between items-center mb-4">
-          <h2 className="font-bold text-lg">Matrice Financière - Enveloppes 2026</h2>
+          <h2 className="font-bold text-lg">Matrice Financière - Enveloppes {selectedYear}</h2>
           <button onClick={exportMatrixCSV} className="bg-green-600 text-white px-4 py-2 rounded font-semibold"><Download size={18} className="inline mr-2"/> Exporter CSV</button>
         </div>
         <div className="overflow-x-auto">
@@ -439,6 +508,70 @@ export default function App() {
                     <td className="p-2 border text-right">-</td>
                   </React.Fragment>
                 ))}
+              </tr>
+
+              {/* Lignes de Synthèse demandées */}
+              <tr><td colSpan={38} className="p-2 bg-white border-0"></td></tr>
+              
+              <tr className="text-gray-600 italic bg-gray-50">
+                <td className="p-2 border font-semibold">Budget Mensuel objectif</td>
+                <td className="p-2 border text-right">-</td>
+                {Array(12).fill(0).map((_, m) => (
+                  <React.Fragment key={m}>
+                    <td className="p-2 border text-right">{allTotals.totalPlafond.toFixed(0)}</td>
+                    <td className="p-2 border text-right bg-gray-100">{(allTotals.totalPlafond * (m + 1)).toFixed(0)}</td>
+                    <td className="p-2 border text-center">-</td>
+                  </React.Fragment>
+                ))}
+              </tr>
+
+              <tr className="text-gray-600 italic">
+                <td className="p-2 border font-semibold">Delta Mensuel ( Rea VS Obj )</td>
+                <td className="p-2 border text-right">-</td>
+                {Array(12).fill(0).map((_, m) => {
+                  const obj = allTotals.totalPlafond;
+                  const cumObj = obj * (m + 1);
+                  const real = allTotals.monthlySum[m];
+                  const cumReal = allTotals.cumulativeSum[m];
+                  const deltaPct = obj > 0 ? ((real - obj) / obj) * 100 : 0;
+                  const cumDeltaPct = cumObj > 0 ? ((cumReal - cumObj) / cumObj) * 100 : 0;
+                  return (
+                    <React.Fragment key={m}>
+                      <td className={`p-2 border text-right font-medium ${deltaPct > 0 ? 'text-red-500' : 'text-green-600'}`}>{deltaPct.toFixed(0)}%</td>
+                      <td className={`p-2 border text-right bg-gray-50 font-medium ${cumDeltaPct > 0 ? 'text-red-500' : 'text-green-600'}`}>{cumDeltaPct.toFixed(0)}%</td>
+                      <td className="p-2 border text-center">-</td>
+                    </React.Fragment>
+                  );
+                })}
+              </tr>
+
+              <tr className="text-gray-600 italic bg-gray-50">
+                <td className="p-2 border font-semibold">Suivi Mensuel ( Euros )</td>
+                <td className="p-2 border text-right">-</td>
+                {Array(12).fill(0).map((_, m) => (
+                  <React.Fragment key={m}>
+                    <td className="p-2 border text-right">{allTotals.totalPlafond.toFixed(0)}</td>
+                    <td className="p-2 border text-right bg-gray-100">{(allTotals.totalPlafond * (m + 1)).toFixed(0)}</td>
+                    <td className="p-2 border text-center">-</td>
+                  </React.Fragment>
+                ))}
+              </tr>
+
+              <tr className="text-gray-600 italic">
+                <td className="p-2 border font-semibold">Share Mensuel ( % )</td>
+                <td className="p-2 border text-right">-</td>
+                {Array(12).fill(0).map((_, m) => {
+                  const totalAnnuel = allTotals.cumulativeSum[11] || 1;
+                  const sharePct = (allTotals.monthlySum[m] / totalAnnuel) * 100;
+                  const cumSharePct = (allTotals.cumulativeSum[m] / totalAnnuel) * 100;
+                  return (
+                    <React.Fragment key={m}>
+                      <td className="p-2 border text-right">{allTotals.monthlySum[m] > 0 ? sharePct.toFixed(1) + '%' : '-'}</td>
+                      <td className="p-2 border text-right bg-gray-50">{allTotals.cumulativeSum[m] > 0 ? cumSharePct.toFixed(1) + '%' : '-'}</td>
+                      <td className="p-2 border text-center">-</td>
+                    </React.Fragment>
+                  );
+                })}
               </tr>
             </tbody>
           </table>
@@ -588,7 +721,7 @@ export default function App() {
               {regSuccess ? (
                 <div className="bg-green-50 text-green-700 p-4 rounded-xl text-center text-sm font-medium">Demande envoyée à l'administrateur ! <button onClick={() => setIsRegistering(false)} className="mt-4 w-full bg-white border border-green-300 py-2 rounded-lg font-bold">Retour</button></div>
               ) : (
-                <form onSubmit={async (e) => { e.preventDefault(); await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'config', 'users_auth'), { pending: [...(usersConfig.pending || []), { name: regName, email: regEmail.toLowerCase().trim(), password: regPassword, requestDate: new Date().toLocaleDateString('fr-FR') }] }); setRegSuccess(true); window.location.href = `mailto:l.clementiaux@doc-city.fr?subject=Nouvel Acces Doccity Budget&body=Demande de ${regName}`; }} className="space-y-4">
+                <form onSubmit={async (e) => { e.preventDefault(); await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'config', 'users_auth'), { pending: [...(usersConfig.pending || []), { name: regName, email: regEmail.toLowerCase().trim(), password: regPassword, requestDate: new Date().toLocaleDateString('fr-FR') }] }); setRegSuccess(true); window.location.href = `mailto:finance@doc-city.fr?subject=Nouvel Acces Doccity Budget&body=Demande de ${regName}`; }} className="space-y-4">
                   <input type="text" placeholder="Nom" className="w-full p-3 border rounded-xl bg-gray-50" value={regName} onChange={(e) => setRegName(e.target.value)} required />
                   <input type="email" placeholder="Email" className="w-full p-3 border rounded-xl bg-gray-50" value={regEmail} onChange={(e) => setRegEmail(e.target.value)} required />
                   <input type="password" placeholder="Mot de passe" className="w-full p-3 border rounded-xl bg-gray-50" value={regPassword} onChange={(e) => setRegPassword(e.target.value)} required />
@@ -609,7 +742,28 @@ export default function App() {
       <div className="max-w-[1400px] mx-auto">
         <header className="mb-8 flex justify-between items-center bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
           <div><h1 className="text-3xl font-extrabold text-blue-900 tracking-tight">Doccity Budget <span className="bg-green-100 text-green-700 text-xs px-2 py-1 rounded-full font-bold ml-2">Cloud Actif</span></h1><p className="text-gray-500 font-medium">Tableau de bord de gestion financière partagé</p></div>
-          <div className="bg-gray-50 px-5 py-3 rounded-xl border flex items-center gap-4"><div className="text-right"><p className="text-sm font-bold">{currentUser.name}</p><p className="text-xs text-blue-600 font-semibold">{currentUser.role}</p></div><button onClick={() => setCurrentUser(null)} className="text-gray-500 hover:text-red-600 p-2"><LogOut size={20} /></button></div>
+          
+          <div className="flex items-center gap-6">
+            {/* Sélecteur d'année global */}
+            <div className="flex items-center gap-2 bg-blue-50 px-3 py-2 rounded-xl border border-blue-100">
+              <Calendar size={18} className="text-blue-600" />
+              <select 
+                className="bg-transparent font-bold text-blue-900 outline-none cursor-pointer"
+                value={selectedYear}
+                onChange={(e) => setSelectedYear(parseInt(e.target.value))}
+              >
+                {YEARS.map(y => <option key={y} value={y}>{y}</option>)}
+              </select>
+            </div>
+
+            <div className="bg-gray-50 px-5 py-3 rounded-xl border flex items-center gap-4">
+              <div className="text-right">
+                <p className="text-sm font-bold">{currentUser.name}</p>
+                <p className="text-xs text-blue-600 font-semibold">{currentUser.role}</p>
+              </div>
+              <button onClick={() => setCurrentUser(null)} className="text-gray-500 hover:text-red-600 p-2"><LogOut size={20} /></button>
+            </div>
+          </div>
         </header>
 
         <nav className="flex gap-3 mb-6 overflow-x-auto pb-2 scrollbar-hide">
