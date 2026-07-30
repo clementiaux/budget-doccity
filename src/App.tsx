@@ -72,7 +72,7 @@ export default function App() {
   const [regSuccess, setRegSuccess] = useState(false);
   
   const [activeTab, setActiveTab] = useState('saisie');
-  const [selectedYear, setSelectedYear] = useState(2026); // Global Year State
+  const [selectedYear, setSelectedYear] = useState(2026);
   
   const [expenses, setExpenses] = useState([]);
   const [envelopes, setEnvelopes] = useState([]);
@@ -136,7 +136,10 @@ export default function App() {
     const [cat, setCat] = useState(envelopes.length > 0 ? envelopes[0].id : '');
     const [sub, setSub] = useState(cat && subCategoriesMap[cat] ? subCategoriesMap[cat][0] : '');
     const [amount, setAmount] = useState('');
+    const [isProvisional, setIsProvisional] = useState(false);
     const [editId, setEditId] = useState(null);
+    const [expenseToDelete, setExpenseToDelete] = useState(null); // Fix confirmation
+    
     const [filterCat, setFilterCat] = useState('');
     const [filterSub, setFilterSub] = useState('');
     const [minAmount, setMinAmount] = useState('');
@@ -147,28 +150,41 @@ export default function App() {
     const handleAddOrEdit = async (e) => {
       e.preventDefault();
       if (!desc || !amount || !date || !cat) return;
-      const payload = { date, description: desc, amount: parseFloat(amount), categoryId: cat, subCategory: sub };
+      
+      const payload = { 
+        date, 
+        description: desc, 
+        amount: parseFloat(amount), 
+        categoryId: cat, 
+        subCategory: sub,
+        isProvisional: isProvisional
+      };
+      
       if (editId) {
         await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'expenses', editId), payload);
         setEditId(null);
       } else {
         await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'expenses'), payload);
       }
-      setDesc(''); setAmount(''); setDate('');
+      setDesc(''); setAmount(''); setDate(''); setIsProvisional(false);
     };
 
     const handleEditClick = (expense) => {
-      setDesc(expense.description); setDate(expense.date); setCat(expense.categoryId); setSub(expense.subCategory); setAmount(expense.amount); setEditId(expense.id);
+      setDesc(expense.description); 
+      setDate(expense.date); 
+      setCat(expense.categoryId); 
+      setSub(expense.subCategory); 
+      setAmount(expense.amount); 
+      setIsProvisional(expense.isProvisional || false);
+      setEditId(expense.id);
       window.scrollTo({ top: 0, behavior: 'smooth' });
     };
 
-    const handleDeleteClick = async (id) => {
-      if(window.confirm("Supprimer cette dépense ?")) {
-        await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'expenses', id));
-      }
+    const executeDeleteExpense = async (id) => {
+      await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'expenses', id));
+      setExpenseToDelete(null);
     };
 
-    // Filtre global par année + filtres locaux
     let filtered = expenses.filter(ex => {
       if (new Date(ex.date).getFullYear() !== selectedYear) return false;
       if (filterCat && ex.categoryId !== filterCat) return false;
@@ -187,8 +203,8 @@ export default function App() {
     });
 
     const exportCSV = () => {
-      const headers = ['Date', 'Description', 'Catégorie', 'Sous-Catégorie', 'Montant'];
-      const rows = filtered.map(ex => `"${ex.date}";"${ex.description.replace(/"/g, '""')}";"${ex.categoryId}";"${ex.subCategory}";"${ex.amount}"`);
+      const headers = ['Date', 'Description', 'Statut', 'Catégorie', 'Sous-Catégorie', 'Montant'];
+      const rows = filtered.map(ex => `"${ex.date}";"${ex.description.replace(/"/g, '""')}";"${ex.isProvisional ? 'Prévisionnel' : 'Facture Validée'}";"${ex.categoryId}";"${ex.subCategory}";"${ex.amount}"`);
       const csvContent = [headers.join(';'), ...rows].join('\n');
       const blob = new Blob(["\uFEFF" + csvContent], { type: 'text/csv;charset=utf-8;' });
       const url = URL.createObjectURL(blob);
@@ -198,10 +214,10 @@ export default function App() {
 
     return (
       <div className="space-y-6">
-        <form onSubmit={handleAddOrEdit} className={`p-6 rounded-xl border shadow-sm grid grid-cols-1 md:grid-cols-5 gap-4 ${editId ? 'bg-blue-50 border-blue-200' : 'bg-white'}`}>
+        <form onSubmit={handleAddOrEdit} className={`p-6 rounded-xl border shadow-sm grid grid-cols-1 md:grid-cols-6 gap-4 ${editId ? 'bg-blue-50 border-blue-200' : 'bg-white'}`}>
           <div className="col-span-full mb-2 font-bold text-gray-700 flex justify-between">
             {editId ? 'Modifier la dépense' : 'Saisir une nouvelle dépense'}
-            {editId && <button type="button" onClick={() => {setEditId(null); setDesc(''); setAmount(''); setDate('');}} className="text-red-500 text-sm">Annuler la modification</button>}
+            {editId && <button type="button" onClick={() => {setEditId(null); setDesc(''); setAmount(''); setDate(''); setIsProvisional(false);}} className="text-red-500 text-sm hover:underline">Annuler la modification</button>}
           </div>
           <input className="border p-2 rounded" placeholder="Date" type="date" value={date} onChange={(e) => setDate(e.target.value)} required />
           <input className="border p-2 rounded" placeholder="Description" value={desc} onChange={(e) => setDesc(e.target.value)} required />
@@ -212,12 +228,19 @@ export default function App() {
             {subCategoriesMap[cat]?.map(s => <option key={s} value={s}>{s}</option>)}
           </select>
           <input className="border p-2 rounded" placeholder="Montant (€)" type="number" step="0.01" value={amount} onChange={(e) => setAmount(e.target.value)} required />
-          <button className={`${editId ? 'bg-green-600' : 'bg-blue-600'} text-white p-2 rounded col-span-full font-bold flex justify-center items-center gap-2`}>
+          
+          <label className={`flex items-center justify-center gap-2 border p-2 rounded cursor-pointer transition-colors ${isProvisional ? 'bg-orange-50 border-orange-200 text-orange-700' : 'bg-green-50 border-green-200 text-green-700'}`}>
+            <input type="checkbox" checked={isProvisional} onChange={(e) => setIsProvisional(e.target.checked)} className="w-4 h-4 cursor-pointer" />
+            <span className="text-sm font-semibold select-none">{isProvisional ? 'Prévisionnel' : 'Facture Validée'}</span>
+          </label>
+
+          <button className={`${editId ? 'bg-green-600' : 'bg-blue-600'} text-white p-2 rounded col-span-full font-bold flex justify-center items-center gap-2 hover:opacity-90`}>
             {editId ? <Save size={18} /> : <Plus size={18} />}
             {editId ? 'Mettre à jour' : 'Ajouter Dépense'}
           </button>
         </form>
 
+        {}
         <div className="bg-white p-6 rounded-xl border shadow-sm">
           <div className="flex flex-col md:flex-row justify-between mb-4 gap-4 items-center">
             <h2 className="font-bold text-lg">Historique partagé des saisies ({selectedYear})</h2>
@@ -225,6 +248,7 @@ export default function App() {
               <Download size={18} /> Exporter CSV
             </button>
           </div>
+          
           <div className="bg-gray-50 p-4 rounded-lg mb-4 grid grid-cols-1 md:grid-cols-4 gap-4 border">
             <div>
               <label className="text-xs text-gray-500 font-semibold mb-1 block">Filtrer par Catégorie</label>
@@ -240,7 +264,17 @@ export default function App() {
                 {filterCat && subCategoriesMap[filterCat]?.map(s => <option key={s} value={s}>{s}</option>)}
               </select>
             </div>
+            <div>
+              <label className="text-xs text-gray-500 font-semibold mb-1 block">Montant Min (€)</label>
+              <input type="number" placeholder="Ex: 100" className="border p-2 rounded w-full bg-white" value={minAmount} onChange={(e) => setMinAmount(e.target.value)} />
+            </div>
+            <div>
+              <label className="text-xs text-gray-500 font-semibold mb-1 block">Montant Max (€)</label>
+              <input type="number" placeholder="Ex: 5000" className="border p-2 rounded w-full bg-white" value={maxAmount} onChange={(e) => setMaxAmount(e.target.value)} />
+            </div>
           </div>
+
+          {}
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="bg-gray-100">
@@ -254,18 +288,33 @@ export default function App() {
               </thead>
               <tbody>
                 {filtered.map(ex => (
-                  <tr key={ex.id} className="border-b hover:bg-gray-50">
-                    <td className="p-3 whitespace-nowrap">{new Date(ex.date).toLocaleDateString('fr-FR')}</td>
-                    <td className="p-3">{ex.description}</td>
-                    <td className="p-3 text-gray-600"><span className="font-semibold text-gray-800">{ex.categoryId}</span> <br/> {ex.subCategory}</td>
-                    <td className="p-3 text-right font-medium">{formatCurrency(ex.amount)}</td>
+                  <tr key={ex.id} className={`border-b transition-colors ${ex.isProvisional ? 'bg-red-50 text-red-700 hover:bg-red-100' : 'hover:bg-gray-50'}`}>
+                    <td className="p-3 whitespace-nowrap font-medium">{new Date(ex.date).toLocaleDateString('fr-FR')}</td>
+                    <td className="p-3">
+                      {ex.description}
+                      {ex.isProvisional && <span className="ml-2 text-[10px] bg-red-600 text-white px-2 py-0.5 rounded-full uppercase font-bold tracking-wider inline-block">Prévisionnel</span>}
+                    </td>
+                    <td className={`p-3 ${ex.isProvisional ? 'text-red-600' : 'text-gray-600'}`}>
+                      <span className={`font-semibold ${ex.isProvisional ? 'text-red-700' : 'text-gray-800'}`}>{ex.categoryId}</span> <br/> {ex.subCategory}
+                    </td>
+                    <td className="p-3 text-right font-bold">{formatCurrency(ex.amount)}</td>
                     <td className="p-3 text-center">
-                      <button onClick={() => handleEditClick(ex)} className="text-blue-600 p-1 mx-1 hover:bg-blue-100 rounded"><Edit2 size={16} /></button>
-                      <button onClick={() => handleDeleteClick(ex.id)} className="text-red-600 p-1 mx-1 hover:bg-red-100 rounded"><Trash2 size={16} /></button>
+                      {expenseToDelete === ex.id ? (
+                        <div className="flex justify-center items-center gap-1">
+                          <span className="text-[10px] text-red-600 font-bold">Confirmer?</span>
+                          <button onClick={() => executeDeleteExpense(ex.id)} className="bg-red-600 text-white p-1 rounded hover:bg-red-700"><Trash2 size={16} /></button>
+                          <button onClick={() => setExpenseToDelete(null)} className="bg-gray-200 p-1 rounded hover:bg-gray-300"><X size={16} /></button>
+                        </div>
+                      ) : (
+                        <>
+                          <button onClick={() => handleEditClick(ex)} className={`${ex.isProvisional ? 'text-red-800 hover:bg-red-200' : 'text-blue-600 hover:bg-blue-100'} p-1 mx-1 rounded`}><Edit2 size={16} /></button>
+                          <button onClick={() => setExpenseToDelete(ex.id)} className={`text-red-600 p-1 mx-1 ${ex.isProvisional ? 'hover:bg-red-200' : 'hover:bg-red-100'} rounded`}><Trash2 size={16} /></button>
+                        </>
+                      )}
                     </td>
                   </tr>
                 ))}
-                {filtered.length === 0 && <tr><td colSpan="5" className="p-4 text-center text-gray-500 italic">Aucune dépense trouvée pour {selectedYear}.</td></tr>}
+                {filtered.length === 0 && <tr><td colSpan="5" className="p-4 text-center text-gray-500 italic">Aucune dépense trouvée pour {selectedYear} selon vos critères.</td></tr>}
               </tbody>
             </table>
           </div>
@@ -282,7 +331,6 @@ export default function App() {
       } else { setSelectedMonths([...selectedMonths, mIndex]); }
     };
 
-    // Filter by months AND globally selected year
     const filteredExpenses = expenses.filter(ex => 
       selectedMonths.includes(new Date(ex.date).getMonth()) && 
       new Date(ex.date).getFullYear() === selectedYear
@@ -296,11 +344,17 @@ export default function App() {
       const envExpenses = filteredExpenses.filter(ex => ex.categoryId === env.id);
       const spent = envExpenses.reduce((sum, ex) => sum + ex.amount, 0);
       
-      // Calculate sub-category totals for this envelope
       const subCatTotals = {};
       envExpenses.forEach(ex => {
-        if(!subCatTotals[ex.subCategory]) subCatTotals[ex.subCategory] = 0;
-        subCatTotals[ex.subCategory] += ex.amount;
+        const key = `${ex.subCategory}_${ex.isProvisional ? 'prev' : 'val'}`;
+        if(!subCatTotals[key]) {
+          subCatTotals[key] = {
+            name: ex.subCategory,
+            isProvisional: !!ex.isProvisional,
+            amount: 0
+          };
+        }
+        subCatTotals[key].amount += ex.amount;
       });
 
       totalBudget += proratedBudget; totalSpent += spent;
@@ -354,12 +408,19 @@ export default function App() {
                   
                   {subCatsPresent && (
                     <div className="flex flex-wrap gap-2 mt-3 ml-2 border-l-2 border-gray-200 pl-3">
-                      {Object.entries(stat.subCatTotals).sort((a,b)=>b[1]-a[1]).map(([subName, subTotal]) => {
-                         const subPct = stat.spent > 0 ? ((subTotal / stat.spent) * 100).toFixed(1) : 0;
+                      {Object.values(stat.subCatTotals).sort((a,b)=>b.amount-a.amount).map((sub) => {
+                         const subPct = stat.spent > 0 ? ((sub.amount / stat.spent) * 100).toFixed(1) : 0;
                          return (
-                           <div key={subName} className="text-xs bg-gray-50 border border-gray-200 px-3 py-1.5 rounded-md text-gray-600 shadow-sm flex items-center gap-2">
-                              <span className="uppercase">{subName}</span>
-                              <span className="font-bold text-gray-900 bg-white px-2 py-0.5 rounded border">{formatCurrency(subTotal)} ({subPct}%)</span>
+                           <div key={`${sub.name}-${sub.isProvisional}`} className={`text-xs border px-3 py-1.5 rounded-md shadow-sm flex items-center gap-2 ${sub.isProvisional ? 'bg-red-50 border-red-200 text-red-700' : 'bg-gray-50 border-gray-200 text-gray-700'}`}>
+                              <span className="uppercase">
+                                {sub.name} 
+                                <span className={sub.isProvisional ? 'font-bold text-red-600 ml-1' : 'font-bold text-green-600 ml-1'}>
+                                  {sub.isProvisional ? '(Prév)' : '(Validé)'}
+                                </span>
+                              </span>
+                              <span className={`font-bold px-2 py-0.5 rounded border bg-white ${sub.isProvisional ? 'text-red-700' : 'text-gray-900'}`}>
+                                {formatCurrency(sub.amount)} ({subPct}%)
+                              </span>
                            </div>
                          );
                       })}
@@ -379,7 +440,6 @@ export default function App() {
       const data = {};
       envelopes.forEach(env => {
         const monthly = Array(12).fill(0);
-        // Filtre les dépenses pour cette enveloppe ET pour l'année sélectionnée
         expenses.filter(ex => ex.categoryId === env.id && new Date(ex.date).getFullYear() === selectedYear).forEach(ex => { 
           monthly[new Date(ex.date).getMonth()] += ex.amount; 
         });
@@ -419,14 +479,12 @@ export default function App() {
         csvRows.push(row.join(';'));
       });
       
-      // Ligne Total Immeuble
       let rowTotal = ['"Total Immeuble"', allTotals.totalPlafond.toFixed(2)];
       for(let m = 0; m < 12; m++) {
         rowTotal.push(allTotals.monthlySum[m].toFixed(2), allTotals.cumulativeSum[m].toFixed(2), '-');
       }
       csvRows.push(rowTotal.join(';'));
 
-      // Nouvelles Lignes de Synthèse
       let rowObj = ['"Budget Mensuel objectif"', '-'];
       let rowDelta = ['"Delta Mensuel ( Rea VS Obj )"', '-'];
       let rowSuivi = ['"Suivi Mensuel ( Euros )"', '-'];
@@ -510,7 +568,6 @@ export default function App() {
                 ))}
               </tr>
 
-              {/* Lignes de Synthèse demandées */}
               <tr><td colSpan={38} className="p-2 bg-white border-0"></td></tr>
               
               <tr className="text-gray-600 italic bg-gray-50">
@@ -588,23 +645,27 @@ export default function App() {
     const [newSubInput, setNewSubInput] = useState('');
     const [newEnvName, setNewEnvName] = useState('');
     const [newEnvAmount, setNewEnvAmount] = useState('');
+    const [envToDelete, setEnvToDelete] = useState(null); // Fix confirmation
 
     const startEdit = (env) => { setEditingEnv(env.id); setTempEnvName(env.name); setTempEnvAmount(env.allocatedAmount); setTempSubs([...(subCategoriesMap[env.id] || [])]); };
+    
     const saveEdit = async () => {
       const newEnvs = envelopes.map(e => e.id === editingEnv ? { ...e, name: tempEnvName, allocatedAmount: parseFloat(tempEnvAmount) } : e);
       const newMap = { ...subCategoriesMap, [editingEnv]: tempSubs };
       await updateConfig(newEnvs, newMap);
       setEditingEnv(null);
     };
+    
     const addSub = () => { if (newSubInput.trim() && !tempSubs.includes(newSubInput)) { setTempSubs([...tempSubs, newSubInput.trim()]); setNewSubInput(''); } };
     const removeSub = (sub) => { setTempSubs(tempSubs.filter(s => s !== sub)); };
-    const deleteEnv = async (id) => {
-      if(window.confirm("Supprimer cette enveloppe ?")) {
-        const newEnvs = envelopes.filter(e => e.id !== id);
-        const newMap = {...subCategoriesMap}; delete newMap[id];
-        await updateConfig(newEnvs, newMap);
-      }
+    
+    const executeDeleteEnv = async (id) => {
+      const newEnvs = envelopes.filter(e => e.id !== id);
+      const newMap = {...subCategoriesMap}; delete newMap[id];
+      await updateConfig(newEnvs, newMap);
+      setEnvToDelete(null);
     };
+
     const createEnv = async (e) => {
       e.preventDefault(); if(!newEnvName || !newEnvAmount) return;
       const id = Date.now().toString();
@@ -637,7 +698,21 @@ export default function App() {
                 </div>
               ) : (
                 <>
-                  <div className="flex justify-between items-start mb-2"><h3 className="font-bold text-lg pr-8">{env.name}</h3><div className="flex gap-2 absolute top-4 right-4"><button onClick={()=>startEdit(env)} className="text-blue-600"><Edit2 size={16}/></button><button onClick={()=>deleteEnv(env.id)} className="text-red-600"><Trash2 size={16}/></button></div></div>
+                  <div className="flex justify-between items-start mb-2">
+                    <h3 className="font-bold text-lg pr-8">{env.name}</h3>
+                    {envToDelete === env.id ? (
+                      <div className="flex gap-1 absolute top-4 right-4 bg-red-50 border border-red-200 p-1 rounded">
+                        <span className="text-[10px] text-red-600 font-bold self-center px-1">Confirmer?</span>
+                        <button onClick={()=>executeDeleteEnv(env.id)} className="bg-red-600 text-white p-1 rounded hover:bg-red-700"><Trash2 size={14}/></button>
+                        <button onClick={()=>setEnvToDelete(null)} className="bg-white text-gray-700 p-1 border rounded hover:bg-gray-100"><X size={14}/></button>
+                      </div>
+                    ) : (
+                      <div className="flex gap-2 absolute top-4 right-4">
+                        <button onClick={()=>startEdit(env)} className="text-blue-600 hover:text-blue-800"><Edit2 size={16}/></button>
+                        <button onClick={()=>setEnvToDelete(env.id)} className="text-red-600 hover:text-red-800"><Trash2 size={16}/></button>
+                      </div>
+                    )}
+                  </div>
                   <p className="text-blue-600 font-bold mb-4">{formatCurrency(env.allocatedAmount)} <span className="text-xs text-gray-400 font-normal">/ an</span></p>
                   <div className="flex flex-wrap gap-1">{subCategoriesMap[env.id]?.map(s => (<span key={s} className="bg-gray-100 text-gray-600 text-xs px-2 py-1 rounded border">{s}</span>))}</div>
                 </>
@@ -744,7 +819,6 @@ export default function App() {
           <div><h1 className="text-3xl font-extrabold text-blue-900 tracking-tight">Doccity Budget <span className="bg-green-100 text-green-700 text-xs px-2 py-1 rounded-full font-bold ml-2">Cloud Actif</span></h1><p className="text-gray-500 font-medium">Tableau de bord de gestion financière partagé</p></div>
           
           <div className="flex items-center gap-6">
-            {/* Sélecteur d'année global */}
             <div className="flex items-center gap-2 bg-blue-50 px-3 py-2 rounded-xl border border-blue-100">
               <Calendar size={18} className="text-blue-600" />
               <select 
