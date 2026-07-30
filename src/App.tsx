@@ -138,7 +138,7 @@ export default function App() {
     const [amount, setAmount] = useState('');
     const [isProvisional, setIsProvisional] = useState(false);
     const [editId, setEditId] = useState(null);
-    const [expenseToDelete, setExpenseToDelete] = useState(null); // Fix confirmation
+    const [expenseToDelete, setExpenseToDelete] = useState(null);
     
     const [filterCat, setFilterCat] = useState('');
     const [filterSub, setFilterSub] = useState('');
@@ -161,9 +161,15 @@ export default function App() {
       };
       
       if (editId) {
+        // Enregistrement du nom de celui qui modifie
+        payload.updatedBy = currentUser.name;
+        payload.updatedAt = new Date().toISOString();
         await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'expenses', editId), payload);
         setEditId(null);
       } else {
+        // Enregistrement du nom de celui qui crée
+        payload.createdBy = currentUser.name;
+        payload.createdAt = new Date().toISOString();
         await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'expenses'), payload);
       }
       setDesc(''); setAmount(''); setDate(''); setIsProvisional(false);
@@ -203,8 +209,11 @@ export default function App() {
     });
 
     const exportCSV = () => {
-      const headers = ['Date', 'Description', 'Statut', 'Catégorie', 'Sous-Catégorie', 'Montant'];
-      const rows = filtered.map(ex => `"${ex.date}";"${ex.description.replace(/"/g, '""')}";"${ex.isProvisional ? 'Prévisionnel' : 'Facture Validée'}";"${ex.categoryId}";"${ex.subCategory}";"${ex.amount}"`);
+      const headers = ['Date', 'Description', 'Statut', 'Catégorie', 'Sous-Catégorie', 'Montant', 'Auteur'];
+      const rows = filtered.map(ex => {
+        const author = ex.updatedBy ? `Modifie par ${ex.updatedBy}` : (ex.createdBy ? `Cree par ${ex.createdBy}` : 'Inconnu');
+        return `"${ex.date}";"${ex.description.replace(/"/g, '""')}";"${ex.isProvisional ? 'Prévisionnel' : 'Facture Validée'}";"${ex.categoryId}";"${ex.subCategory}";"${ex.amount}";"${author}"`;
+      });
       const csvContent = [headers.join(';'), ...rows].join('\n');
       const blob = new Blob(["\uFEFF" + csvContent], { type: 'text/csv;charset=utf-8;' });
       const url = URL.createObjectURL(blob);
@@ -240,7 +249,6 @@ export default function App() {
           </button>
         </form>
 
-        {}
         <div className="bg-white p-6 rounded-xl border shadow-sm">
           <div className="flex flex-col md:flex-row justify-between mb-4 gap-4 items-center">
             <h2 className="font-bold text-lg">Historique partagé des saisies ({selectedYear})</h2>
@@ -274,7 +282,6 @@ export default function App() {
             </div>
           </div>
 
-          {}
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="bg-gray-100">
@@ -282,6 +289,7 @@ export default function App() {
                   <th className="p-3 text-left cursor-pointer hover:bg-gray-200" onClick={() => { setSortField('date'); setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc'); }}>Date</th>
                   <th className="p-3 text-left">Description</th>
                   <th className="p-3 text-left">Catégorie</th>
+                  <th className="p-3 text-left">Auteur</th>
                   <th className="p-3 text-right cursor-pointer hover:bg-gray-200" onClick={() => { setSortField('amount'); setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc'); }}>Montant</th>
                   <th className="p-3 text-center">Actions</th>
                 </tr>
@@ -296,6 +304,13 @@ export default function App() {
                     </td>
                     <td className={`p-3 ${ex.isProvisional ? 'text-red-600' : 'text-gray-600'}`}>
                       <span className={`font-semibold ${ex.isProvisional ? 'text-red-700' : 'text-gray-800'}`}>{ex.categoryId}</span> <br/> {ex.subCategory}
+                    </td>
+                    <td className="p-3 text-xs">
+                      {ex.updatedBy ? (
+                        <span className="text-blue-700"><span className="italic text-[10px] text-gray-500">Modifié par</span><br/><span className="font-semibold">{ex.updatedBy}</span></span>
+                      ) : ex.createdBy ? (
+                        <span className="text-gray-700"><span className="italic text-[10px] text-gray-500">Créé par</span><br/><span className="font-semibold">{ex.createdBy}</span></span>
+                      ) : <span className="text-gray-400 italic">Inconnu</span>}
                     </td>
                     <td className="p-3 text-right font-bold">{formatCurrency(ex.amount)}</td>
                     <td className="p-3 text-center">
@@ -314,7 +329,7 @@ export default function App() {
                     </td>
                   </tr>
                 ))}
-                {filtered.length === 0 && <tr><td colSpan="5" className="p-4 text-center text-gray-500 italic">Aucune dépense trouvée pour {selectedYear} selon vos critères.</td></tr>}
+                {filtered.length === 0 && <tr><td colSpan="6" className="p-4 text-center text-gray-500 italic">Aucune dépense trouvée pour {selectedYear} selon vos critères.</td></tr>}
               </tbody>
             </table>
           </div>
@@ -407,23 +422,56 @@ export default function App() {
                   </div>
                   
                   {subCatsPresent && (
-                    <div className="flex flex-wrap gap-2 mt-3 ml-2 border-l-2 border-gray-200 pl-3">
-                      {Object.values(stat.subCatTotals).sort((a,b)=>b.amount-a.amount).map((sub) => {
-                         const subPct = stat.spent > 0 ? ((sub.amount / stat.spent) * 100).toFixed(1) : 0;
-                         return (
-                           <div key={`${sub.name}-${sub.isProvisional}`} className={`text-xs border px-3 py-1.5 rounded-md shadow-sm flex items-center gap-2 ${sub.isProvisional ? 'bg-red-50 border-red-200 text-red-700' : 'bg-gray-50 border-gray-200 text-gray-700'}`}>
-                              <span className="uppercase">
-                                {sub.name} 
-                                <span className={sub.isProvisional ? 'font-bold text-red-600 ml-1' : 'font-bold text-green-600 ml-1'}>
-                                  {sub.isProvisional ? '(Prév)' : '(Validé)'}
-                                </span>
-                              </span>
-                              <span className={`font-bold px-2 py-0.5 rounded border bg-white ${sub.isProvisional ? 'text-red-700' : 'text-gray-900'}`}>
-                                {formatCurrency(sub.amount)} ({subPct}%)
-                              </span>
-                           </div>
-                         );
-                      })}
+                    <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4 ml-2 border-l-2 border-gray-200 pl-3">
+                      
+                      {/* Colonne Factures Validées */}
+                      <div>
+                        <h4 className="text-xs font-bold text-green-700 uppercase mb-2 border-b border-green-200 pb-1">Validé</h4>
+                        <div className="flex flex-col gap-2">
+                          {Object.values(stat.subCatTotals)
+                            .filter(sub => !sub.isProvisional)
+                            .sort((a,b)=>b.amount-a.amount)
+                            .map((sub) => {
+                              const subPct = stat.spent > 0 ? ((sub.amount / stat.spent) * 100).toFixed(1) : 0;
+                              return (
+                                <div key={`${sub.name}-val`} className="text-xs border px-3 py-2 rounded-md shadow-sm flex items-center justify-between bg-gray-50 border-gray-200 text-gray-700">
+                                   <span className="uppercase font-semibold">{sub.name}</span>
+                                   <span className="font-bold px-2 py-0.5 rounded border bg-white text-gray-900">
+                                     {formatCurrency(sub.amount)} <span className="text-gray-400 font-normal ml-1">({subPct}%)</span>
+                                   </span>
+                                </div>
+                              );
+                          })}
+                          {Object.values(stat.subCatTotals).filter(sub => !sub.isProvisional).length === 0 && (
+                            <div className="text-xs text-gray-400 italic bg-gray-50 border border-dashed rounded-md p-2 text-center">Aucune dépense validée</div>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Colonne Dépenses Prévisionnelles */}
+                      <div>
+                        <h4 className="text-xs font-bold text-red-700 uppercase mb-2 border-b border-red-200 pb-1">Prévisionnel</h4>
+                        <div className="flex flex-col gap-2">
+                          {Object.values(stat.subCatTotals)
+                            .filter(sub => sub.isProvisional)
+                            .sort((a,b)=>b.amount-a.amount)
+                            .map((sub) => {
+                              const subPct = stat.spent > 0 ? ((sub.amount / stat.spent) * 100).toFixed(1) : 0;
+                              return (
+                                <div key={`${sub.name}-prev`} className="text-xs border px-3 py-2 rounded-md shadow-sm flex items-center justify-between bg-red-50 border-red-200 text-red-700">
+                                   <span className="uppercase font-semibold">{sub.name}</span>
+                                   <span className="font-bold px-2 py-0.5 rounded border bg-white text-red-700">
+                                     {formatCurrency(sub.amount)} <span className="text-red-400 font-normal ml-1">({subPct}%)</span>
+                                   </span>
+                                </div>
+                              );
+                          })}
+                          {Object.values(stat.subCatTotals).filter(sub => sub.isProvisional).length === 0 && (
+                            <div className="text-xs text-gray-400 italic bg-gray-50 border border-dashed rounded-md p-2 text-center">Aucun prévisionnel</div>
+                          )}
+                        </div>
+                      </div>
+                      
                     </div>
                   )}
                 </div>
@@ -645,7 +693,7 @@ export default function App() {
     const [newSubInput, setNewSubInput] = useState('');
     const [newEnvName, setNewEnvName] = useState('');
     const [newEnvAmount, setNewEnvAmount] = useState('');
-    const [envToDelete, setEnvToDelete] = useState(null); // Fix confirmation
+    const [envToDelete, setEnvToDelete] = useState(null);
 
     const startEdit = (env) => { setEditingEnv(env.id); setTempEnvName(env.name); setTempEnvAmount(env.allocatedAmount); setTempSubs([...(subCategoriesMap[env.id] || [])]); };
     
