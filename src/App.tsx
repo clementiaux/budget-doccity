@@ -141,6 +141,8 @@ export default function App() {
     const [editId, setEditId] = useState(null);
     const [expenseToDelete, setExpenseToDelete] = useState(null);
     
+    // Filters
+    const [searchDesc, setSearchDesc] = useState('');
     const [filterCat, setFilterCat] = useState('');
     const [filterSub, setFilterSub] = useState('');
     const [minAmount, setMinAmount] = useState('');
@@ -173,8 +175,8 @@ export default function App() {
         // Enregistrement de la dépense principale
         await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'expenses'), payload);
 
-        // Création des duplicatas si prévisionnel + mois sélectionnés
-        if (isProvisional && selectedRecurringMonths.length > 0) {
+        // Création des duplicatas si des mois sont sélectionnés (valable pour validé ET prévisionnel)
+        if (selectedRecurringMonths.length > 0) {
             const [yyyy, mm, dd] = date.split('-');
             const baseMonth = parseInt(mm, 10) - 1;
             const safeDd = parseInt(dd, 10) > 28 ? '28' : dd; // Sécurité pour les fins de mois
@@ -212,6 +214,7 @@ export default function App() {
 
     let filtered = expenses.filter(ex => {
       if (new Date(ex.date).getFullYear() !== selectedYear) return false;
+      if (searchDesc && !ex.description.toLowerCase().includes(searchDesc.toLowerCase())) return false;
       if (filterCat && ex.categoryId !== filterCat) return false;
       if (filterSub && ex.subCategory !== filterSub) return false;
       if (minAmount && ex.amount < parseFloat(minAmount)) return false;
@@ -259,16 +262,16 @@ export default function App() {
           </select>
           <input className="border p-2 rounded" placeholder="Montant (€)" type="number" step="0.01" value={amount} onChange={(e) => setAmount(e.target.value)} required />
           
-          <label className={`flex items-center justify-center gap-2 border p-2 rounded cursor-pointer transition-colors ${isProvisional ? 'bg-orange-50 border-orange-200 text-orange-700' : 'bg-green-50 border-green-200 text-green-700'}`}>
-            <input type="checkbox" checked={isProvisional} onChange={(e) => { setIsProvisional(e.target.checked); if(!e.target.checked) setSelectedRecurringMonths([]); }} className="w-4 h-4 cursor-pointer" />
-            <span className="text-sm font-semibold select-none">{isProvisional ? 'Prévisionnel' : 'Facture Validée'}</span>
+          <label className="flex items-center justify-center gap-2 border p-2 rounded cursor-pointer transition-colors bg-white hover:bg-gray-50 text-gray-700">
+            <input type="checkbox" checked={isProvisional} onChange={(e) => setIsProvisional(e.target.checked)} className="w-4 h-4 cursor-pointer accent-blue-600" />
+            <span className="text-sm font-semibold select-none">Prévisionnel</span>
           </label>
 
-          {/* Section Récurrence pour les Prévisionnels (uniquement en création) */}
-          {isProvisional && !editId && (
-            <div className="col-span-full mt-2 p-4 bg-orange-50 border border-orange-200 rounded-lg animate-fade-in">
-              <p className="text-sm font-bold text-orange-800 mb-3 flex items-center gap-2">
-                 Dupliquer ce prévisionnel sur d'autres mois de l'année ? <span className="font-normal text-xs italic">(Optionnel, même montant)</span>
+          {/* Section Récurrence (pour toutes les nouvelles saisies) */}
+          {!editId && (
+            <div className="col-span-full mt-2 p-4 bg-blue-50 border border-blue-200 rounded-lg animate-fade-in">
+              <p className="text-sm font-bold text-blue-800 mb-3 flex items-center gap-2">
+                 Dupliquer cette saisie sur d'autres mois de l'année ? <span className="font-normal text-xs italic">(Optionnel, même montant)</span>
               </p>
               <div className="flex flex-wrap gap-2">
                 {SHORTMONTHS.map((m, i) => {
@@ -279,7 +282,7 @@ export default function App() {
                       key={i}
                       disabled={isBaseMonth}
                       onClick={() => setSelectedRecurringMonths(prev => prev.includes(i) ? prev.filter(x => x !== i) : [...prev, i])}
-                      className={`px-3 py-1.5 rounded-full text-xs font-bold border transition-colors ${isBaseMonth ? 'bg-gray-200 text-gray-400 border-gray-200 cursor-not-allowed' : selectedRecurringMonths.includes(i) ? 'bg-orange-600 text-white border-orange-600 shadow-sm' : 'bg-white text-orange-700 border-orange-300 hover:bg-orange-100'}`}
+                      className={`px-3 py-1.5 rounded-full text-xs font-bold border transition-colors ${isBaseMonth ? 'bg-gray-200 text-gray-400 border-gray-200 cursor-not-allowed' : selectedRecurringMonths.includes(i) ? 'bg-blue-600 text-white border-blue-600 shadow-sm' : 'bg-white text-blue-700 border-blue-300 hover:bg-blue-100'}`}
                     >
                       {m}
                     </button>
@@ -303,28 +306,35 @@ export default function App() {
             </button>
           </div>
           
-          <div className="bg-gray-50 p-4 rounded-lg mb-4 grid grid-cols-1 md:grid-cols-4 gap-4 border">
+          <div className="bg-gray-50 p-4 rounded-lg mb-4 grid grid-cols-1 md:grid-cols-5 gap-4 border">
+            <div>
+              <label className="text-xs text-gray-500 font-semibold mb-1 block">Recherche (Description)</label>
+              <div className="relative">
+                <Search className="absolute left-2 top-2.5 text-gray-400" size={14} />
+                <input type="text" placeholder="Mot-clé..." className="border p-2 pl-7 rounded w-full bg-white text-sm" value={searchDesc} onChange={(e) => setSearchDesc(e.target.value)} />
+              </div>
+            </div>
             <div>
               <label className="text-xs text-gray-500 font-semibold mb-1 block">Filtrer par Catégorie</label>
-              <select className="border p-2 rounded w-full bg-white" value={filterCat} onChange={(e) => {setFilterCat(e.target.value); setFilterSub('');}}>
+              <select className="border p-2 rounded w-full bg-white text-sm" value={filterCat} onChange={(e) => {setFilterCat(e.target.value); setFilterSub('');}}>
                 <option value="">Toutes</option>
                 {envelopes.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}
               </select>
             </div>
             <div>
               <label className="text-xs text-gray-500 font-semibold mb-1 block">Filtrer par Sous-Catégorie</label>
-              <select className="border p-2 rounded w-full bg-white" value={filterSub} onChange={(e) => setFilterSub(e.target.value)} disabled={!filterCat}>
+              <select className="border p-2 rounded w-full bg-white text-sm" value={filterSub} onChange={(e) => setFilterSub(e.target.value)} disabled={!filterCat}>
                 <option value="">Toutes</option>
                 {filterCat && subCategoriesMap[filterCat]?.map(s => <option key={s} value={s}>{s}</option>)}
               </select>
             </div>
             <div>
               <label className="text-xs text-gray-500 font-semibold mb-1 block">Montant Min (€)</label>
-              <input type="number" placeholder="Ex: 100" className="border p-2 rounded w-full bg-white" value={minAmount} onChange={(e) => setMinAmount(e.target.value)} />
+              <input type="number" placeholder="Ex: 100" className="border p-2 rounded w-full bg-white text-sm" value={minAmount} onChange={(e) => setMinAmount(e.target.value)} />
             </div>
             <div>
               <label className="text-xs text-gray-500 font-semibold mb-1 block">Montant Max (€)</label>
-              <input type="number" placeholder="Ex: 5000" className="border p-2 rounded w-full bg-white" value={maxAmount} onChange={(e) => setMaxAmount(e.target.value)} />
+              <input type="number" placeholder="Ex: 5000" className="border p-2 rounded w-full bg-white text-sm" value={maxAmount} onChange={(e) => setMaxAmount(e.target.value)} />
             </div>
           </div>
 
