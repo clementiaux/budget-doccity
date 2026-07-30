@@ -1,6 +1,6 @@
 // @ts-nocheck
 import React, { useState, useEffect } from 'react';
-import { Download, Edit2, Trash2, Plus, Settings, Save, X, Search, ArrowUpDown, LogOut, User, Calendar } from 'lucide-react';
+import { Download, Edit2, Trash2, Plus, Settings, Save, X, Search, ArrowUpDown, LogOut, User, Calendar, CheckCircle } from 'lucide-react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, doc, setDoc, updateDoc, deleteDoc, onSnapshot, collection, addDoc } from 'firebase/firestore';
@@ -137,6 +137,7 @@ export default function App() {
     const [sub, setSub] = useState(cat && subCategoriesMap[cat] ? subCategoriesMap[cat][0] : '');
     const [amount, setAmount] = useState('');
     const [isProvisional, setIsProvisional] = useState(false);
+    const [selectedRecurringMonths, setSelectedRecurringMonths] = useState([]);
     const [editId, setEditId] = useState(null);
     const [expenseToDelete, setExpenseToDelete] = useState(null);
     
@@ -161,18 +162,35 @@ export default function App() {
       };
       
       if (editId) {
-        // Enregistrement du nom de celui qui modifie
         payload.updatedBy = currentUser.name;
         payload.updatedAt = new Date().toISOString();
         await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'expenses', editId), payload);
         setEditId(null);
       } else {
-        // Enregistrement du nom de celui qui crée
         payload.createdBy = currentUser.name;
         payload.createdAt = new Date().toISOString();
+        
+        // Enregistrement de la dépense principale
         await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'expenses'), payload);
+
+        // Création des duplicatas si prévisionnel + mois sélectionnés
+        if (isProvisional && selectedRecurringMonths.length > 0) {
+            const [yyyy, mm, dd] = date.split('-');
+            const baseMonth = parseInt(mm, 10) - 1;
+            const safeDd = parseInt(dd, 10) > 28 ? '28' : dd; // Sécurité pour les fins de mois
+
+            for (const m of selectedRecurringMonths) {
+                if (m === baseMonth) continue; // On ne duplique pas sur le mois déjà saisi
+                const newDate = `${yyyy}-${String(m + 1).padStart(2, '0')}-${safeDd}`;
+                const recurringPayload = {
+                    ...payload,
+                    date: newDate
+                };
+                await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'expenses'), recurringPayload);
+            }
+        }
       }
-      setDesc(''); setAmount(''); setDate(''); setIsProvisional(false);
+      setDesc(''); setAmount(''); setDate(''); setIsProvisional(false); setSelectedRecurringMonths([]);
     };
 
     const handleEditClick = (expense) => {
@@ -183,6 +201,7 @@ export default function App() {
       setAmount(expense.amount); 
       setIsProvisional(expense.isProvisional || false);
       setEditId(expense.id);
+      setSelectedRecurringMonths([]); // Pas de récurrence en édition
       window.scrollTo({ top: 0, behavior: 'smooth' });
     };
 
@@ -221,12 +240,14 @@ export default function App() {
       document.body.appendChild(link); link.click(); document.body.removeChild(link);
     };
 
+    const baseMonthIndex = date ? parseInt(date.split('-')[1], 10) - 1 : -1;
+
     return (
       <div className="space-y-6">
         <form onSubmit={handleAddOrEdit} className={`p-6 rounded-xl border shadow-sm grid grid-cols-1 md:grid-cols-6 gap-4 ${editId ? 'bg-blue-50 border-blue-200' : 'bg-white'}`}>
           <div className="col-span-full mb-2 font-bold text-gray-700 flex justify-between">
             {editId ? 'Modifier la dépense' : 'Saisir une nouvelle dépense'}
-            {editId && <button type="button" onClick={() => {setEditId(null); setDesc(''); setAmount(''); setDate(''); setIsProvisional(false);}} className="text-red-500 text-sm hover:underline">Annuler la modification</button>}
+            {editId && <button type="button" onClick={() => {setEditId(null); setDesc(''); setAmount(''); setDate(''); setIsProvisional(false); setSelectedRecurringMonths([]);}} className="text-red-500 text-sm hover:underline">Annuler la modification</button>}
           </div>
           <input className="border p-2 rounded" placeholder="Date" type="date" value={date} onChange={(e) => setDate(e.target.value)} required />
           <input className="border p-2 rounded" placeholder="Description" value={desc} onChange={(e) => setDesc(e.target.value)} required />
@@ -239,13 +260,38 @@ export default function App() {
           <input className="border p-2 rounded" placeholder="Montant (€)" type="number" step="0.01" value={amount} onChange={(e) => setAmount(e.target.value)} required />
           
           <label className={`flex items-center justify-center gap-2 border p-2 rounded cursor-pointer transition-colors ${isProvisional ? 'bg-orange-50 border-orange-200 text-orange-700' : 'bg-green-50 border-green-200 text-green-700'}`}>
-            <input type="checkbox" checked={isProvisional} onChange={(e) => setIsProvisional(e.target.checked)} className="w-4 h-4 cursor-pointer" />
+            <input type="checkbox" checked={isProvisional} onChange={(e) => { setIsProvisional(e.target.checked); if(!e.target.checked) setSelectedRecurringMonths([]); }} className="w-4 h-4 cursor-pointer" />
             <span className="text-sm font-semibold select-none">{isProvisional ? 'Prévisionnel' : 'Facture Validée'}</span>
           </label>
 
+          {/* Section Récurrence pour les Prévisionnels (uniquement en création) */}
+          {isProvisional && !editId && (
+            <div className="col-span-full mt-2 p-4 bg-orange-50 border border-orange-200 rounded-lg animate-fade-in">
+              <p className="text-sm font-bold text-orange-800 mb-3 flex items-center gap-2">
+                 Dupliquer ce prévisionnel sur d'autres mois de l'année ? <span className="font-normal text-xs italic">(Optionnel, même montant)</span>
+              </p>
+              <div className="flex flex-wrap gap-2">
+                {SHORTMONTHS.map((m, i) => {
+                  const isBaseMonth = i === baseMonthIndex;
+                  return (
+                    <button
+                      type="button"
+                      key={i}
+                      disabled={isBaseMonth}
+                      onClick={() => setSelectedRecurringMonths(prev => prev.includes(i) ? prev.filter(x => x !== i) : [...prev, i])}
+                      className={`px-3 py-1.5 rounded-full text-xs font-bold border transition-colors ${isBaseMonth ? 'bg-gray-200 text-gray-400 border-gray-200 cursor-not-allowed' : selectedRecurringMonths.includes(i) ? 'bg-orange-600 text-white border-orange-600 shadow-sm' : 'bg-white text-orange-700 border-orange-300 hover:bg-orange-100'}`}
+                    >
+                      {m}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
           <button className={`${editId ? 'bg-green-600' : 'bg-blue-600'} text-white p-2 rounded col-span-full font-bold flex justify-center items-center gap-2 hover:opacity-90`}>
             {editId ? <Save size={18} /> : <Plus size={18} />}
-            {editId ? 'Mettre à jour' : 'Ajouter Dépense'}
+            {editId ? 'Mettre à jour' : 'Ajouter Dépense(s)'}
           </button>
         </form>
 
