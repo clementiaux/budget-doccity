@@ -5,23 +5,26 @@ import {
   FileText, RefreshCw, Check, ArrowRight
 } from 'lucide-react';
 import { initializeApp } from 'firebase/app';
-import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
+import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, doc, setDoc, updateDoc, deleteDoc, onSnapshot, collection, addDoc } from 'firebase/firestore';
 
-const firebaseConfig = {
-  apiKey: "AIzaSyC8UXwghqNCTJc703ZICZj3-_yZ9t9PntY",
-  authDomain: "budget-marseille.firebaseapp.com",
-  projectId: "budget-marseille",
-  storageBucket: "budget-marseille.firebasestorage.app",
-  messagingSenderId: "580135397481",
-  appId: "1:580135397481:web:0b8aa26a9c73f34c5e9af8",
-  measurementId: "G-Z2TM6BVKER"
-};
+// Environment fallback to user's config
+const firebaseConfig = typeof __firebase_config !== 'undefined' 
+  ? JSON.parse(__firebase_config) 
+  : {
+      apiKey: "AIzaSyC8UXwghqNCTJc703ZICZj3-_yZ9t9PntY",
+      authDomain: "budget-marseille.firebaseapp.com",
+      projectId: "budget-marseille",
+      storageBucket: "budget-marseille.firebasestorage.app",
+      messagingSenderId: "580135397481",
+      appId: "1:580135397481:web:0b8aa26a9c73f34c5e9af8",
+      measurementId: "G-Z2TM6BVKER"
+    };
 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
-const appId = 'budget-marseille';
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'budget-marseille';
 
 const formatCurrency = (val) => `${Number(val || 0).toLocaleString('fr-FR', { minimumFractionDigits: 0, maximumFractionDigits: 2 })} €`;
 const MONTHNAMES = ['Janvier', 'Février', 'Mars', 'Avril', 'Mai', 'Juin', 'Juillet', 'Août', 'Septembre', 'Octobre', 'Novembre', 'Décembre'];
@@ -135,6 +138,7 @@ export default function App() {
   const [firebaseUser, setFirebaseUser] = useState(null);
   const [isDBReady, setIsDBReady] = useState(false);
   const [usersConfig, setUsersConfig] = useState({ users: [], pending: [] });
+  
   const [isRegistering, setIsRegistering] = useState(false);
   const [regName, setRegName] = useState('');
   const [regEmail, setRegEmail] = useState('');
@@ -148,7 +152,7 @@ export default function App() {
   const [envelopes, setEnvelopes] = useState([]);
   const [subCategoriesMap, setSubCategoriesMap] = useState({});
 
-  // États pour conserver l'import CSV
+  // Import State
   const [importPreviewData, setImportPreviewData] = useState([]);
   const [importFileName, setImportFileName] = useState('');
   const [importDuplicatesCount, setImportDuplicatesCount] = useState(0);
@@ -161,8 +165,15 @@ export default function App() {
 
   useEffect(() => {
     const initAuth = async () => {
-      try { await signInAnonymously(auth); } 
-      catch (error) { console.error("Erreur d'authentification Firebase", error); }
+      try {
+        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+          await signInWithCustomToken(auth, __initial_auth_token);
+        } else {
+          await signInAnonymously(auth);
+        }
+      } catch (error) { 
+        console.error("Firebase auth error", error); 
+      }
     };
     initAuth();
     const unsubscribe = onAuthStateChanged(auth, setFirebaseUser);
@@ -172,6 +183,7 @@ export default function App() {
   useEffect(() => {
     if (!firebaseUser) return;
 
+    // Listen to Budget Config
     const configRef = doc(db, 'artifacts', appId, 'public', 'data', 'config', 'budget_setup');
     const unsubConfig = onSnapshot(configRef, (docSnap) => {
       if (docSnap.exists()) {
@@ -182,15 +194,17 @@ export default function App() {
       } else {
         setDoc(configRef, { envelopes: DEFAULT_ENVELOPES, subCategoriesMap: DEFAULT_SUB_CATEGORIES });
       }
-    });
+    }, (error) => console.error("Config fetch error:", error));
 
+    // Listen to Expenses
     const expensesRef = collection(db, 'artifacts', appId, 'public', 'data', 'expenses');
     const unsubExpenses = onSnapshot(expensesRef, (snapshot) => {
       const expData = [];
       snapshot.forEach(docSnap => expData.push({ id: docSnap.id, ...docSnap.data() }));
       setExpenses(expData);
-    });
+    }, (error) => console.error("Expenses fetch error:", error));
 
+    // Listen to Users Auth Settings
     const usersAuthRef = doc(db, 'artifacts', appId, 'public', 'data', 'config', 'users_auth');
     const unsubUsers = onSnapshot(usersAuthRef, (docSnap) => {
       if (docSnap.exists()) {
@@ -198,12 +212,13 @@ export default function App() {
       } else {
         setDoc(usersAuthRef, { users: [], pending: [] });
       }
-    });
+    }, (error) => console.error("Users config fetch error:", error));
 
     return () => { unsubConfig(); unsubExpenses(); unsubUsers(); };
   }, [firebaseUser]);
 
   const updateConfig = async (newEnvelopes, newMap) => {
+    if (!firebaseUser) return;
     await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'config', 'budget_setup'), {
       envelopes: newEnvelopes,
       subCategoriesMap: newMap
@@ -242,17 +257,14 @@ export default function App() {
     const [editId, setEditId] = useState(null);
     const [expenseToDelete, setExpenseToDelete] = useState(null);
     
-    // Nouvel état pour la sélection multiple
     const [selectedExpenses, setSelectedExpenses] = useState([]);
     const [showBatchDeleteConfirm, setShowBatchDeleteConfirm] = useState(false);
 
-    // Réinitialiser la sélection si on change d'année
     useEffect(() => {
       setSelectedExpenses([]);
       setShowBatchDeleteConfirm(false);
     }, [selectedYear]);
     
-    // Filtres
     const [searchDesc, setSearchDesc] = useState('');
     const [searchInvoice, setSearchInvoice] = useState('');
     const [filterCat, setFilterCat] = useState('');
@@ -264,7 +276,7 @@ export default function App() {
 
     const handleAddOrEdit = async (e) => {
       e.preventDefault();
-      if (!desc || !amount || !date || !cat) return;
+      if (!desc || !amount || !date || !cat || !firebaseUser) return;
       
       const payload = { 
         date: String(date), 
@@ -317,25 +329,22 @@ export default function App() {
     };
 
     const executeDeleteExpense = async (id) => {
+      if (!firebaseUser) return;
       await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'expenses', id));
       setExpenseToDelete(null);
     };
 
     const handleSelectAll = (e) => {
-      if (e.target.checked) {
-        setSelectedExpenses(filtered.map(ex => ex.id));
-      } else {
-        setSelectedExpenses([]);
-      }
+      if (e.target.checked) setSelectedExpenses(filtered.map(ex => ex.id));
+      else setSelectedExpenses([]);
     };
 
     const handleSelectOne = (id) => {
-      setSelectedExpenses(prev => 
-        prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
-      );
+      setSelectedExpenses(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
     };
 
     const executeBatchDelete = async () => {
+      if (!firebaseUser) return;
       for (const id of selectedExpenses) {
         await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'expenses', id));
       }
@@ -374,7 +383,6 @@ export default function App() {
 
     return (
       <div className="space-y-6 animate-fade-in">
-        {/* Bandeau d'information si des factures existent sur d'autres années */}
         {otherYearsWithExpenses.length > 0 && (
           <div className="bg-amber-50 border border-amber-200 p-4 rounded-xl flex flex-col md:flex-row items-start md:items-center justify-between gap-3 shadow-sm">
             <div className="flex items-center gap-3 text-amber-900">
@@ -403,55 +411,54 @@ export default function App() {
           </div>
         )}
 
-        {/* Formulaire de Saisie */}
         <form onSubmit={handleAddOrEdit} className={`p-6 rounded-xl border shadow-sm grid grid-cols-1 md:grid-cols-12 gap-4 ${editId ? 'bg-blue-50 border-blue-200' : 'bg-white'}`}>
-          <div className="col-span-full mb-2 font-bold text-gray-700 flex justify-between">
+          <div className="col-span-full mb-2 font-bold text-gray-700 flex justify-between items-center">
             {editId ? 'Modifier la dépense' : `Saisir une nouvelle dépense (${selectedYear})`}
-            {editId && <button type="button" onClick={() => {setEditId(null); setDesc(''); setInvoiceNum(''); setAmount(''); setDate(''); setIsProvisional(false); setSelectedRecurringMonths([]);}} className="text-red-500 text-sm hover:underline">Annuler la modification</button>}
+            {editId && <button type="button" onClick={() => {setEditId(null); setDesc(''); setInvoiceNum(''); setAmount(''); setDate(''); setIsProvisional(false); setSelectedRecurringMonths([]);}} className="text-red-500 text-sm hover:underline">Annuler</button>}
           </div>
           
-          <div className="md:col-span-2">
+          <div className="col-span-1 md:col-span-2">
             <label className="block text-xs font-semibold text-gray-500 mb-1">Date</label>
             <input className="border p-2 rounded w-full" type="date" value={date} onChange={(e) => setDate(e.target.value)} required />
           </div>
-          <div className="md:col-span-2">
-            <label className="block text-xs font-semibold text-gray-500 mb-1">N° Facture (Optionnel)</label>
+          <div className="col-span-1 md:col-span-2">
+            <label className="block text-xs font-semibold text-gray-500 mb-1">N° Facture (Opt)</label>
             <input className="border p-2 rounded w-full" placeholder="Ex: FAC-2025-01" type="text" value={invoiceNum} onChange={(e) => setInvoiceNum(e.target.value)} />
           </div>
-          <div className="md:col-span-3">
-            <label className="block text-xs font-semibold text-gray-500 mb-1">Bénéficiaire / Description</label>
+          <div className="col-span-1 md:col-span-3">
+            <label className="block text-xs font-semibold text-gray-500 mb-1">Bénéficiaire / Desc.</label>
             <input className="border p-2 rounded w-full" placeholder="Fournisseur ou libellé" value={desc} onChange={(e) => setDesc(e.target.value)} required />
           </div>
-          <div className="md:col-span-2">
+          <div className="col-span-1 md:col-span-2">
             <label className="block text-xs font-semibold text-gray-500 mb-1">Montant (€)</label>
             <input className="border p-2 rounded w-full" placeholder="0.00" type="number" step="0.01" value={amount} onChange={(e) => setAmount(e.target.value)} required />
           </div>
           
-          <div className="md:col-span-3">
+          <div className="col-span-1 md:col-span-3">
             <label className="block text-xs font-semibold text-gray-500 mb-1">Catégorie</label>
             <select className="border p-2 rounded w-full" value={cat} onChange={(e) => { setCat(e.target.value); setSub(subCategoriesMap[e.target.value]?.[0] || ''); }}>
               {envelopes.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}
             </select>
           </div>
           
-          <div className="md:col-span-3">
+          <div className="col-span-1 md:col-span-3">
             <label className="block text-xs font-semibold text-gray-500 mb-1">Sous-catégorie</label>
             <select className="border p-2 rounded w-full" value={sub} onChange={(e) => setSub(e.target.value)}>
               {subCategoriesMap[cat]?.map(s => <option key={s} value={s}>{s}</option>)}
             </select>
           </div>
           
-          <div className="md:col-span-3 flex items-end">
+          <div className="col-span-1 md:col-span-3 flex items-end">
             <label className="flex items-center justify-center gap-2 border p-2.5 rounded cursor-pointer transition-colors bg-white hover:bg-gray-50 text-gray-700 w-full">
               <input type="checkbox" checked={isProvisional} onChange={(e) => setIsProvisional(e.target.checked)} className="w-4 h-4 cursor-pointer accent-blue-600" />
               <span className="text-sm font-semibold select-none">Dépense Prévisionnelle</span>
             </label>
           </div>
 
-          <div className="md:col-span-6 flex items-end">
+          <div className="col-span-1 md:col-span-6 flex items-end">
             <button className={`${editId ? 'bg-green-600 hover:bg-green-700' : 'bg-blue-600 hover:bg-blue-700'} text-white p-2.5 rounded font-bold flex justify-center items-center gap-2 w-full shadow-sm transition-colors`}>
               {editId ? <Save size={18} /> : <Plus size={18} />}
-              {editId ? 'Mettre à jour la saisie' : 'Ajouter la Dépense'}
+              {editId ? 'Mettre à jour' : 'Ajouter la Dépense'}
             </button>
           </div>
 
@@ -472,7 +479,6 @@ export default function App() {
           )}
         </form>
 
-        {/* Historique et Filtres */}
         <div className="bg-white p-6 rounded-xl border shadow-sm">
           <div className="flex flex-col md:flex-row justify-between mb-4 gap-4 items-center">
             <div>
@@ -490,25 +496,25 @@ export default function App() {
                 onClick={() => { setSearchDesc(''); setSearchInvoice(''); setFilterCat(''); setFilterSub(''); setMinAmount(''); setMaxAmount(''); }}
                 className="text-xs font-semibold text-blue-600 hover:underline flex items-center gap-1"
               >
-                <RefreshCw size={14} /> Réinitialiser les filtres
+                <RefreshCw size={14} /> Réinitialiser
               </button>
             )}
           </div>
           
           <div className="bg-gray-50 p-4 rounded-lg mb-4 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-6 gap-3 border">
-            <div className="md:col-span-2">
+            <div className="col-span-1 md:col-span-2">
               <label className="text-xs text-gray-500 font-semibold mb-1 block">Bénéficiaire / Desc.</label>
               <div className="relative"><Search className="absolute left-2 top-2.5 text-gray-400" size={14} /><input type="text" placeholder="Rechercher..." className="border p-2 pl-7 rounded w-full bg-white text-sm" value={searchDesc} onChange={(e) => setSearchDesc(e.target.value)} /></div>
             </div>
-            <div className="md:col-span-1">
+            <div className="col-span-1 md:col-span-1">
               <label className="text-xs text-gray-500 font-semibold mb-1 block">N° Facture</label>
               <div className="relative"><FileText className="absolute left-2 top-2.5 text-gray-400" size={14} /><input type="text" placeholder="N°..." className="border p-2 pl-7 rounded w-full bg-white text-sm" value={searchInvoice} onChange={(e) => setSearchInvoice(e.target.value)} /></div>
             </div>
-            <div className="md:col-span-2">
+            <div className="col-span-1 md:col-span-2">
               <label className="text-xs text-gray-500 font-semibold mb-1 block">Catégorie</label>
               <select className="border p-2 rounded w-full bg-white text-sm" value={filterCat} onChange={(e) => {setFilterCat(e.target.value); setFilterSub('');}}><option value="">Toutes</option>{envelopes.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}</select>
             </div>
-            <div className="md:col-span-1">
+            <div className="col-span-1 md:col-span-1">
               <label className="text-xs text-gray-500 font-semibold mb-1 block">Montant Max (€)</label>
               <input type="number" placeholder="Max..." className="border p-2 rounded w-full bg-white text-sm" value={maxAmount} onChange={(e) => setMaxAmount(e.target.value)} />
             </div>
@@ -521,12 +527,12 @@ export default function App() {
               </span>
               {showBatchDeleteConfirm ? (
                 <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-xs font-bold text-red-600 mr-2">Êtes-vous sûr de vouloir tout supprimer ?</span>
-                  <button onClick={executeBatchDelete} className="px-3 py-1.5 bg-red-600 text-white text-xs font-bold rounded-md hover:bg-red-700 transition-colors shadow-sm">Oui, supprimer définitivement</button>
-                  <button onClick={() => setShowBatchDeleteConfirm(false)} className="px-3 py-1.5 bg-white border border-gray-300 text-gray-800 text-xs font-bold rounded-md hover:bg-gray-50 transition-colors shadow-sm">Annuler</button>
+                  <span className="text-xs font-bold text-red-600 mr-2">Sûr de vouloir supprimer ?</span>
+                  <button onClick={executeBatchDelete} className="px-3 py-1.5 bg-red-600 text-white text-xs font-bold rounded-md hover:bg-red-700 shadow-sm">Oui, supprimer</button>
+                  <button onClick={() => setShowBatchDeleteConfirm(false)} className="px-3 py-1.5 bg-white border border-gray-300 text-gray-800 text-xs font-bold rounded-md hover:bg-gray-50 shadow-sm">Annuler</button>
                 </div>
               ) : (
-                <button onClick={() => setShowBatchDeleteConfirm(true)} className="flex items-center gap-2 px-3 py-1.5 bg-white border border-red-300 text-red-700 hover:bg-red-50 text-sm font-bold rounded-md transition-colors shadow-sm">
+                <button onClick={() => setShowBatchDeleteConfirm(true)} className="flex items-center gap-2 px-3 py-1.5 bg-white border border-red-300 text-red-700 hover:bg-red-50 text-sm font-bold rounded-md shadow-sm">
                   Supprimer la sélection
                 </button>
               )}
@@ -546,12 +552,12 @@ export default function App() {
                       title="Tout sélectionner"
                     />
                   </th>
-                  <th className="p-3 text-left cursor-pointer hover:bg-gray-200" onClick={() => { setSortField('date'); setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc'); }}>Date</th>
+                  <th className="p-3 text-left cursor-pointer hover:bg-gray-200 whitespace-nowrap" onClick={() => { setSortField('date'); setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc'); }}>Date</th>
                   <th className="p-3 text-left">N° Facture</th>
                   <th className="p-3 text-left">Bénéficiaire</th>
                   <th className="p-3 text-left">Catégorie & Sous-catégorie</th>
-                  <th className="p-3 text-left">Auteur / Source</th>
-                  <th className="p-3 text-right cursor-pointer hover:bg-gray-200" onClick={() => { setSortField('amount'); setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc'); }}>Montant HT</th>
+                  <th className="p-3 text-left hidden md:table-cell">Auteur</th>
+                  <th className="p-3 text-right cursor-pointer hover:bg-gray-200 whitespace-nowrap" onClick={() => { setSortField('amount'); setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc'); }}>Montant HT</th>
                   <th className="p-3 text-center">Actions</th>
                 </tr>
               </thead>
@@ -576,16 +582,16 @@ export default function App() {
                       <span className={`font-bold ${ex.isProvisional ? 'text-orange-700' : 'text-gray-900'}`}>{ex.categoryId}</span> <br/> 
                       <span className="text-gray-500 text-xs">{ex.subCategory || '-'}</span>
                     </td>
-                    <td className="p-3 text-xs text-gray-500">
+                    <td className="p-3 text-xs text-gray-500 hidden md:table-cell">
                       {ex.updatedBy ? <span>Modifié par <br/><b className="text-gray-700">{ex.updatedBy}</b></span> : ex.createdBy ? <span><b className="text-gray-700">{ex.createdBy}</b></span> : <span>-</span>}
                     </td>
-                    <td className={`p-3 text-right font-bold ${ex.isProvisional ? 'text-orange-700' : 'text-gray-900'}`}>{formatCurrency(ex.amount)}</td>
+                    <td className={`p-3 text-right font-bold whitespace-nowrap ${ex.isProvisional ? 'text-orange-700' : 'text-gray-900'}`}>{formatCurrency(ex.amount)}</td>
                     <td className="p-3 text-center">
                       {expenseToDelete === ex.id ? (
-                        <div className="flex justify-center items-center gap-1">
-                          <span className="text-[10px] text-red-600 font-bold">Supprimer?</span>
-                          <button onClick={() => executeDeleteExpense(ex.id)} className="bg-red-600 text-white p-1 rounded hover:bg-red-700"><Trash2 size={16} /></button>
-                          <button onClick={() => setExpenseToDelete(null)} className="bg-gray-200 p-1 rounded hover:bg-gray-300"><X size={16} /></button>
+                        <div className="flex justify-center items-center gap-1 flex-wrap">
+                          <span className="text-[10px] text-red-600 font-bold hidden xl:block">Sûr?</span>
+                          <button onClick={() => executeDeleteExpense(ex.id)} className="bg-red-600 text-white p-1.5 rounded hover:bg-red-700"><Trash2 size={16} /></button>
+                          <button onClick={() => setExpenseToDelete(null)} className="bg-gray-200 p-1.5 rounded hover:bg-gray-300"><X size={16} /></button>
                         </div>
                       ) : (
                         <div className="flex justify-center gap-2">
@@ -602,7 +608,7 @@ export default function App() {
                       Aucune dépense trouvée pour {selectedYear}.
                       {expenses.length > 0 && otherYearsWithExpenses.length > 0 && (
                         <div className="mt-2 text-sm not-italic font-semibold text-blue-600">
-                          Astuce : Changez l'année en haut de la page pour voir les factures d'autres exercices ({otherYearsWithExpenses.join(', ')}).
+                          Astuce : Changez l'année en haut de la page pour voir les factures d'autres exercices.
                         </div>
                       )}
                     </td>
@@ -639,7 +645,6 @@ export default function App() {
         const lines = text.split(/\r?\n/).filter(line => line.trim());
         if (lines.length < 2) return; 
 
-        // Détection de la ligne d'en-tête
         let headerLineIdx = 0;
         for (let i = 0; i < Math.min(lines.length, 5); i++) {
           const l = lines[i].toLowerCase();
@@ -653,58 +658,32 @@ export default function App() {
         const separator = headerLine.includes(';') ? ';' : (headerLine.includes('\t') ? '\t' : ',');
         const headers = parseCSVLine(headerLine.toLowerCase(), separator).map(h => h.replace(/(^"|"$)/g, '').trim());
         
-        // Date
         let dateIdx = headers.findIndex(h => 
-          h.includes('date de facturation') || 
-          h.includes('date facture') || 
-          h.includes('date de la facture') ||
-          h.includes('date d\'émission') ||
-          h.includes('date d’émission') ||
-          h.includes('invoice date') ||
-          h.includes('bill date')
+          h.includes('date de facturation') || h.includes('date facture') || h.includes('date de la facture') ||
+          h.includes('date d\'émission') || h.includes('date d’émission') || h.includes('invoice date') || h.includes('bill date')
         );
-        if (dateIdx === -1) {
-          dateIdx = headers.findIndex(h => h.includes('date') && !h.includes('échéance') && !h.includes('echeance') && !h.includes('paiement') && !h.includes('due'));
-        }
+        if (dateIdx === -1) dateIdx = headers.findIndex(h => h.includes('date') && !h.includes('échéance') && !h.includes('echeance') && !h.includes('paiement') && !h.includes('due'));
         if (dateIdx === -1) dateIdx = headers.findIndex(h => h.includes('date'));
         
-        // Numéro de facture
         let factIdx = headers.findIndex(h => 
-          h.includes('numéro de facture') || 
-          h.includes('numero de facture') || 
-          h.includes('n° de facture') ||
-          h.includes('n° facture') ||
-          h.includes('num facture') ||
-          h.includes('invoice number') ||
-          h.includes('bill number')
+          h.includes('numéro de facture') || h.includes('numero de facture') || h.includes('n° de facture') ||
+          h.includes('n° facture') || h.includes('num facture') || h.includes('invoice number') || h.includes('bill number')
         );
         if (factIdx === -1) factIdx = headers.findIndex(h => (h.includes('facture') || h.includes('invoice')) && !h.includes('date') && !h.includes('montant'));
         if (factIdx === -1) factIdx = headers.findIndex(h => h.includes('référence') || h.includes('reference') || h.includes('n°'));
         
-        // Bénéficiaire / Fournisseur
         let benefIdx = headers.findIndex(h => 
-          h.includes('fournisseur') || 
-          h.includes('nom du fournisseur') ||
-          h.includes('bénéficiaire') || 
-          h.includes('beneficiaire') || 
-          h.includes('tiers') || 
-          h.includes('supplier') || 
-          h.includes('vendor')
+          h.includes('fournisseur') || h.includes('nom du fournisseur') || h.includes('bénéficiaire') || 
+          h.includes('beneficiaire') || h.includes('tiers') || h.includes('supplier') || h.includes('vendor')
         );
         if (benefIdx === -1) benefIdx = headers.findIndex(h => h.includes('nom') || h.includes('name'));
         
-        // Montant HT
         let montantIdx = headers.findIndex(h => 
-          h.includes('montant ht') || 
-          h.includes('total ht') || 
-          h.includes('net ht') || 
-          h.includes('excl. tax') || 
-          h.includes('subtotal')
+          h.includes('montant ht') || h.includes('total ht') || h.includes('net ht') || h.includes('excl. tax') || h.includes('subtotal')
         );
         if (montantIdx === -1) montantIdx = headers.findIndex(h => (h.includes('montant') || h.includes('total')) && !h.includes('ttc') && !h.includes('tva'));
         if (montantIdx === -1) montantIdx = headers.findIndex(h => h.includes('débit') || h.includes('debit'));
 
-        // Fallbacks d'indices si fichier sans entêtes clairs
         if (dateIdx === -1) dateIdx = 2;
         if (benefIdx === -1) benefIdx = 0;
         if (factIdx === -1) factIdx = 1;
@@ -727,7 +706,6 @@ export default function App() {
            let amount = parseAmountValue(rawMontant);
            let dateVal = cleanAndNormalizeDate(rawDate);
 
-           // Détection des doublons déjà enregistrés
            let isDuplicate = false;
            if (rawFact && rawFact.trim() !== '') {
                const cleanFact = rawFact.trim().toLowerCase();
@@ -784,6 +762,7 @@ export default function App() {
     };
 
     const processImport = async (rowsToProcess) => {
+      if (!firebaseUser) return 0;
       setIsImporting(true);
       let successCount = 0;
       const detectedYears = new Set();
@@ -826,7 +805,6 @@ export default function App() {
       setImportError('');
       const rowsToImport = importPreviewData.filter(r => r.date && !isNaN(r.amount));
       
-      // Blocage strict si une seule ligne est incomplète
       const hasMissingCategories = rowsToImport.some(r => !r.categoryId || !r.subCategory);
       if (hasMissingCategories) {
         setImportError("Action bloquée : Vous devez obligatoirement renseigner une Catégorie ET une Sous-catégorie pour CHAQUE facture avant de valider l'importation globale.");
@@ -841,7 +819,6 @@ export default function App() {
 
     const executeImportReady = async () => {
       setImportError('');
-      // On sépare les lignes prêtes (vertes) et les incomplètes (rouges)
       const readyRows = importPreviewData.filter(r => r.date && !isNaN(r.amount) && r.categoryId && r.subCategory);
       const unreadyRows = importPreviewData.filter(r => !(r.date && !isNaN(r.amount) && r.categoryId && r.subCategory));
       
@@ -852,7 +829,6 @@ export default function App() {
 
       await processImport(readyRows);
       
-      // On met à jour le tableau pour ne garder que les lignes rouges
       setImportPreviewData(unreadyRows);
       if (unreadyRows.length === 0) {
          setImportFileName('');
@@ -922,7 +898,6 @@ export default function App() {
 
         {importPreviewData.length > 0 && (
           <div className="bg-white p-6 rounded-xl border shadow-sm animate-fade-in space-y-4">
-            {/* Outil d'assignation en masse */}
             <div className="p-4 bg-blue-50/70 border border-blue-200 rounded-xl flex flex-col md:flex-row items-center justify-between gap-4">
               <div className="w-full md:w-auto">
                 <span className="text-xs font-bold text-blue-900 block mb-1 uppercase tracking-wider">Gain de temps : Assigner à toutes les lignes</span>
@@ -956,7 +931,7 @@ export default function App() {
                   disabled={!batchCategory}
                   className="px-3 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-300 text-white rounded text-xs font-bold flex items-center gap-1.5 transition-colors"
                 >
-                  <Check size={14} /> Appliquer à tout
+                  <Check size={14} /> Appliquer
                 </button>
               </div>
             </div>
@@ -967,12 +942,11 @@ export default function App() {
                    Vérification des factures ({importPreviewData.length} lignes)
                  </h3>
                  <p className={`text-xs font-bold ${readyCount === importPreviewData.length ? 'text-green-600' : 'text-orange-500'}`}>
-                   {readyCount} / {importPreviewData.length} ligne(s) prêtes (Catégorie et Sous-catégorie obligatoires).
+                   {readyCount} / {importPreviewData.length} ligne(s) prêtes (Catégorie obligatoires).
                  </p>
                </div>
 
                <div className="flex flex-wrap gap-2">
-                 {/* Ce bouton n'apparaît que s'il y a des lignes prêtes, mais pas TOUTES */}
                  {readyCount > 0 && readyCount < importPreviewData.length && (
                    <button 
                      onClick={executeImportReady} 
@@ -1003,7 +977,7 @@ export default function App() {
               <table className="w-full text-sm text-left">
                 <thead className="bg-gray-100 sticky top-0 z-10 shadow-xs">
                   <tr>
-                    <th className="p-3 whitespace-nowrap border-b border-gray-200">Date facturation</th>
+                    <th className="p-3 whitespace-nowrap border-b border-gray-200">Date</th>
                     <th className="p-3 border-b border-gray-200">Fournisseur / Libellé</th>
                     <th className="p-3 border-b border-gray-200">N° Facture</th>
                     <th className="p-3 text-right whitespace-nowrap border-b border-gray-200">Montant HT</th>
@@ -1021,25 +995,25 @@ export default function App() {
                         <input type="date" className="border p-1.5 text-xs rounded w-full bg-white font-medium" value={row.date} onChange={(e) => updateRow(row.id, 'date', e.target.value)} />
                       </td>
                       <td className="p-2">
-                         <input type="text" className="border p-1.5 text-xs rounded w-full bg-white font-medium" value={row.beneficiary} onChange={(e) => updateRow(row.id, 'beneficiary', e.target.value)} placeholder="Fournisseur" />
+                         <input type="text" className="border p-1.5 text-xs rounded w-full bg-white font-medium min-w-[120px]" value={row.beneficiary} onChange={(e) => updateRow(row.id, 'beneficiary', e.target.value)} placeholder="Fournisseur" />
                       </td>
                       <td className="p-2">
-                         <input type="text" className="border p-1.5 text-xs rounded w-full bg-white font-mono text-blue-700 font-semibold" value={row.invoiceNum} onChange={(e) => updateRow(row.id, 'invoiceNum', e.target.value)} placeholder="N° Pièce" />
+                         <input type="text" className="border p-1.5 text-xs rounded w-full bg-white font-mono text-blue-700 font-semibold min-w-[100px]" value={row.invoiceNum} onChange={(e) => updateRow(row.id, 'invoiceNum', e.target.value)} placeholder="N° Pièce" />
                       </td>
                       <td className="p-2 text-right">
                          <div className="flex items-center justify-end gap-1">
-                           <input type="number" step="0.01" className="border p-1.5 text-xs rounded w-28 text-right bg-white font-bold" value={row.amount} onChange={(e) => updateRow(row.id, 'amount', parseFloat(e.target.value))} /> €
+                           <input type="number" step="0.01" className="border p-1.5 text-xs rounded w-24 text-right bg-white font-bold" value={row.amount} onChange={(e) => updateRow(row.id, 'amount', parseFloat(e.target.value))} /> €
                          </div>
                       </td>
                       <td className="p-2">
-                        <select className={`border p-1.5 text-xs rounded w-full font-medium ${row.categoryId ? 'bg-white border-green-300 text-green-900' : 'bg-red-50 border-red-300 text-red-900'}`} value={row.categoryId} onChange={(e) => updateRow(row.id, 'categoryId', e.target.value)}>
-                          <option value="">-- Choisir Catégorie --</option>
+                        <select className={`border p-1.5 text-xs rounded w-full font-medium min-w-[130px] ${row.categoryId ? 'bg-white border-green-300 text-green-900' : 'bg-red-50 border-red-300 text-red-900'}`} value={row.categoryId} onChange={(e) => updateRow(row.id, 'categoryId', e.target.value)}>
+                          <option value="">-- Choisir --</option>
                           {envelopes.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}
                         </select>
                       </td>
                       <td className="p-2">
-                        <select className={`border p-1.5 text-xs rounded w-full font-medium ${row.subCategory ? 'bg-white border-green-300 text-green-900' : 'bg-red-50 border-red-300 text-red-900'}`} value={row.subCategory} onChange={(e) => updateRow(row.id, 'subCategory', e.target.value)} disabled={!row.categoryId}>
-                          <option value="">-- Choisir Sous-Catégorie --</option>
+                        <select className={`border p-1.5 text-xs rounded w-full font-medium min-w-[130px] ${row.subCategory ? 'bg-white border-green-300 text-green-900' : 'bg-red-50 border-red-300 text-red-900'}`} value={row.subCategory} onChange={(e) => updateRow(row.id, 'subCategory', e.target.value)} disabled={!row.categoryId}>
+                          <option value="">-- Choisir --</option>
                           {subCategoriesMap[row.categoryId]?.map(s => <option key={s} value={s}>{s}</option>)}
                         </select>
                       </td>
@@ -1067,11 +1041,8 @@ export default function App() {
     };
 
     const toggleAllMonths = () => {
-      if (selectedMonths.length === 12) {
-        setSelectedMonths([new Date().getMonth()]);
-      } else {
-        setSelectedMonths([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
-      }
+      if (selectedMonths.length === 12) setSelectedMonths([new Date().getMonth()]);
+      else setSelectedMonths([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
     };
 
     const filteredExpenses = expenses.filter(ex => {
@@ -1288,6 +1259,7 @@ export default function App() {
     const [newSubInput, setNewSubInput] = useState('');
     const [newEnvName, setNewEnvName] = useState('');
     const [newEnvAmount, setNewEnvAmount] = useState('');
+    const [envelopeToDelete, setEnvelopeToDelete] = useState(null);
 
     const startEdit = (env) => { 
       setEditingEnv(env.id); 
@@ -1315,6 +1287,15 @@ export default function App() {
       setTempSubs(tempSubs.filter(s => s !== sub)); 
     };
     
+    const executeDeleteEnvelope = async (id) => {
+      if (!firebaseUser) return;
+      const newEnvs = envelopes.filter(e => e.id !== id);
+      const newMap = { ...subCategoriesMap };
+      delete newMap[id];
+      await updateConfig(newEnvs, newMap);
+      setEnvelopeToDelete(null);
+    };
+
     return (
       <div className="space-y-6 animate-fade-in">
         <form onSubmit={async (e)=>{e.preventDefault(); if(!newEnvName || !newEnvAmount) return; const id = Date.now().toString(); const newEnvs = [...envelopes, { id, name: String(newEnvName), allocatedAmount: parseFloat(newEnvAmount) }]; const newMap = { ...subCategoriesMap, [id]: [] }; await updateConfig(newEnvs, newMap); setNewEnvName(''); setNewEnvAmount('');}} className="bg-white p-6 rounded-xl border shadow-sm flex flex-col md:flex-row gap-4 items-end">
@@ -1358,7 +1339,21 @@ export default function App() {
                 </div>
               ) : (
                 <>
-                  <div className="flex justify-between items-start mb-2"><h3 className="font-bold text-lg pr-8 text-gray-800">{env.name}</h3><button onClick={()=>startEdit(env)} className="text-blue-600 hover:text-blue-800 bg-blue-50 p-1.5 rounded transition-colors"><Edit2 size={16}/></button></div>
+                  <div className="flex justify-between items-start mb-2">
+                    <h3 className="font-bold text-lg pr-8 text-gray-800">{env.name}</h3>
+                    {envelopeToDelete === env.id ? (
+                      <div className="flex items-center gap-1">
+                        <span className="text-[10px] text-red-600 font-bold hidden sm:inline-block mr-1">Supprimer?</span>
+                        <button onClick={() => executeDeleteEnvelope(env.id)} className="bg-red-600 text-white p-1.5 rounded hover:bg-red-700 transition-colors"><Trash2 size={16} /></button>
+                        <button onClick={() => setEnvelopeToDelete(null)} className="bg-gray-200 text-gray-700 p-1.5 rounded hover:bg-gray-300 transition-colors"><X size={16} /></button>
+                      </div>
+                    ) : (
+                      <div className="flex gap-2">
+                        <button onClick={()=>startEdit(env)} className="text-blue-600 hover:text-blue-800 bg-blue-50 p-1.5 rounded transition-colors" title="Modifier"><Edit2 size={16}/></button>
+                        <button onClick={()=>setEnvelopeToDelete(env.id)} className="text-gray-400 hover:text-red-600 bg-gray-100 hover:bg-red-50 p-1.5 rounded transition-colors" title="Supprimer"><Trash2 size={16}/></button>
+                      </div>
+                    )}
+                  </div>
                   <p className="text-blue-600 font-bold mb-4">{formatCurrency(env.allocatedAmount)} <span className="text-xs text-gray-400 font-normal">/ an</span></p>
                   <div className="flex flex-wrap gap-1">{subCategoriesMap[env.id]?.map(s => (<span key={s} className="bg-gray-50 text-gray-600 text-xs px-2 py-1 rounded border border-gray-200">{s}</span>))}</div>
                 </>
@@ -1395,6 +1390,306 @@ export default function App() {
               {usersConfig.users?.map((u, i) => (<tr key={i} className="border-b hover:bg-gray-50"><td className="p-3 font-semibold">{u.name}</td><td className="p-3">{u.email}</td><td className="p-3 font-bold text-green-800">{u.role}</td></tr>))}
             </tbody>
           </table>
+        </div>
+      </div>
+    );
+  };
+
+  const ExportTab = () => {
+    const handleExportMultiTab = () => {
+      // Fonction pour échapper les caractères spéciaux dans le format XML
+      const escapeXml = (unsafe) => String(unsafe ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;');
+      
+      // --- ONGLET 1 : saisie dépense ---
+      const headers1 = ['Date de facturation', 'Numéro de facture', 'Fournisseur / Tiers', 'Montant HT', 'Catégorie', 'Sous-Catégorie', 'Prévisionnel'];
+      let rows1 = `<Row ss:StyleID="Header">${headers1.map(h => `<Cell><Data ss:Type="String">${h}</Data></Cell>`).join('')}</Row>\n`;
+      const sortedExpenses = [...expenses].sort((a,b) => new Date(a.date||'1970-01-01') - new Date(b.date||'1970-01-01'));
+      
+      sortedExpenses.forEach(ex => {
+         rows1 += `<Row>
+            <Cell><Data ss:Type="String">${escapeXml(ex.date ? new Date(ex.date).toLocaleDateString('fr-FR') : '')}</Data></Cell>
+            <Cell><Data ss:Type="String">${escapeXml(ex.invoiceNum)}</Data></Cell>
+            <Cell><Data ss:Type="String">${escapeXml(ex.description)}</Data></Cell>
+            <Cell ss:StyleID="Currency"><Data ss:Type="Number">${ex.amount || 0}</Data></Cell>
+            <Cell><Data ss:Type="String">${escapeXml(ex.categoryId)}</Data></Cell>
+            <Cell><Data ss:Type="String">${escapeXml(ex.subCategory)}</Data></Cell>
+            <Cell><Data ss:Type="String">${ex.isProvisional ? 'Oui' : 'Non'}</Data></Cell>
+         </Row>\n`;
+      });
+
+      // --- ONGLET 2 : suivie mensuel (Matrice Détaillée) ---
+      let rows2 = `<Row ss:StyleID="Header">
+         <Cell ss:MergeDown="1"><Data ss:Type="String">Enveloppes</Data></Cell>
+         <Cell ss:MergeDown="1"><Data ss:Type="String">Plafond mensuel</Data></Cell>
+         ${MONTHNAMES.map(m => `<Cell ss:MergeAcross="2"><Data ss:Type="String">${m}</Data></Cell>`).join('')}
+      </Row>\n`;
+      
+      rows2 += `<Row ss:StyleID="HeaderSub">
+         <Cell ss:Index="3"><Data ss:Type="String">Dépense</Data></Cell>
+         <Cell><Data ss:Type="String">Cumul</Data></Cell>
+         <Cell><Data ss:Type="String">Δ</Data></Cell>
+         ${Array(11).fill('<Cell><Data ss:Type="String">Dépense</Data></Cell><Cell><Data ss:Type="String">Cumul</Data></Cell><Cell><Data ss:Type="String">Δ</Data></Cell>').join('')}
+      </Row>\n`;
+
+      const matrixData = {};
+      envelopes.forEach(env => {
+        const monthly = Array(12).fill(0);
+        sortedExpenses.forEach(ex => {
+          const expYear = ex.date ? parseInt(ex.date.split('-')[0], 10) : 0;
+          if (ex.categoryId === env.id && expYear === selectedYear) {
+             const m = ex.date ? parseInt(ex.date.split('-')[1], 10) - 1 : -1;
+             if (m >= 0 && m < 12) monthly[m] += (ex.amount || 0); 
+          }
+        });
+        const cumulative = []; let sum = 0;
+        monthly.forEach(val => { sum += val; cumulative.push(sum); });
+        matrixData[env.id] = { monthly, cumulative };
+      });
+
+      let totalPlafond = envelopes.reduce((sum, e) => sum + (e.allocatedAmount / 12), 0);
+      let monthlySum = Array(12).fill(0); 
+      let cumulativeSum = Array(12).fill(0);
+
+      envelopes.forEach(env => {
+          const d = matrixData[env.id];
+          const plafond = env.allocatedAmount / 12;
+          for(let m = 0; m < 12; m++) { monthlySum[m] += d.monthly[m]; cumulativeSum[m] += d.cumulative[m]; }
+          
+          rows2 += `<Row>
+             <Cell><Data ss:Type="String">${escapeXml(env.name)}</Data></Cell>
+             <Cell ss:StyleID="Currency"><Data ss:Type="Number">${plafond}</Data></Cell>
+             ${Array(12).fill(0).map((_, m) => {
+                 const spent = d.monthly[m];
+                 const cum = d.cumulative[m];
+                 const deltaCum = (plafond * (m + 1)) - cum;
+                 return `
+                     <Cell ss:StyleID="Currency"><Data ss:Type="Number">${spent}</Data></Cell>
+                     <Cell ss:StyleID="CurrencyGray"><Data ss:Type="Number">${cum}</Data></Cell>
+                     <Cell ss:StyleID="${deltaCum >= 0 ? 'CurrencyGreen' : 'CurrencyRed'}"><Data ss:Type="Number">${deltaCum}</Data></Cell>
+                 `;
+             }).join('')}
+          </Row>\n`;
+      });
+
+      rows2 += `<Row ss:StyleID="TotalRow">
+         <Cell><Data ss:Type="String">TOTAL</Data></Cell>
+         <Cell ss:StyleID="BoldCurrency"><Data ss:Type="Number">${totalPlafond}</Data></Cell>
+         ${Array(12).fill(0).map((_, m) => {
+             const spent = monthlySum[m];
+             const cum = cumulativeSum[m];
+             const deltaCum = (totalPlafond * (m + 1)) - cum;
+             return `
+                 <Cell ss:StyleID="BoldCurrency"><Data ss:Type="Number">${spent}</Data></Cell>
+                 <Cell ss:StyleID="BoldCurrencyBlue"><Data ss:Type="Number">${cum}</Data></Cell>
+                 <Cell ss:StyleID="BoldCurrency"><Data ss:Type="Number">${deltaCum}</Data></Cell>
+             `;
+         }).join('')}
+      </Row>\n`;
+
+      // --- ONGLET 3 : envellope (Détail structuré comme l'image) ---
+      const headers3 = ['Poste Budgétaire', 'Nom Prestataire/Fournisseur', 'Budgeté ou Engagé Annuel (HT)', 'Cumul réalisé Annuel (HT)', ...MONTHNAMES, 'Commentaire'];
+      let rows3 = `<Row ss:StyleID="HeaderSub">${headers3.map(h => `<Cell><Data ss:Type="String">${h}</Data></Cell>`).join('')}</Row>\n`;
+      
+      const formatCell = (val, style) => val === 0 ? `<Cell ss:StyleID="${style}"><Data ss:Type="String">-</Data></Cell>` : `<Cell ss:StyleID="${style}"><Data ss:Type="Number">${val}</Data></Cell>`;
+
+      let grandTotalBudget = 0;
+      let grandTotalCumul = 0;
+      let grandTotalMonthly = Array(12).fill(0);
+
+      envelopes.forEach(env => {
+          const subs = subCategoriesMap[env.id] || [];
+          let envTotalCumul = 0;
+          let envMonthly = Array(12).fill(0);
+
+          // Lignes des sous-catégories
+          if (subs.length > 0) {
+              subs.forEach((sub) => {
+                  let subMonthly = Array(12).fill(0);
+                  let subCumul = 0;
+
+                  sortedExpenses.forEach(ex => {
+                      const expYear = ex.date ? parseInt(ex.date.split('-')[0], 10) : 0;
+                      if (ex.categoryId === env.id && ex.subCategory === sub && expYear === selectedYear) {
+                          const m = ex.date ? parseInt(ex.date.split('-')[1], 10) - 1 : -1;
+                          if (m >= 0 && m < 12) {
+                              subMonthly[m] += (ex.amount || 0);
+                              subCumul += (ex.amount || 0);
+                          }
+                      }
+                  });
+
+                  envTotalCumul += subCumul;
+                  for(let i=0; i<12; i++) envMonthly[i] += subMonthly[i];
+
+                  rows3 += `<Row>
+                      <Cell><Data ss:Type="String">${escapeXml(sub)}</Data></Cell>
+                      <Cell><Data ss:Type="String"></Data></Cell>
+                      <Cell ss:StyleID="Currency"><Data ss:Type="String">-</Data></Cell>
+                      ${formatCell(subCumul, "Currency")}
+                      ${subMonthly.map(val => formatCell(val, "Currency")).join('')}
+                      <Cell><Data ss:Type="String"></Data></Cell>
+                  </Row>\n`;
+              });
+          }
+
+          grandTotalBudget += env.allocatedAmount;
+          grandTotalCumul += envTotalCumul;
+          for(let i=0; i<12; i++) grandTotalMonthly[i] += envMonthly[i];
+
+          // Ligne de Total de l'enveloppe
+          rows3 += `<Row ss:StyleID="EnvTotalRow">
+              <Cell ss:StyleID="EnvNameCell"><Data ss:Type="String">${escapeXml(env.name)}</Data></Cell>
+              <Cell ss:StyleID="EnvTotalRow"><Data ss:Type="String"></Data></Cell>
+              ${formatCell(env.allocatedAmount, "EnvBudgetCell")}
+              ${formatCell(envTotalCumul, "EnvCumulCell")}
+              ${envMonthly.map(val => formatCell(val, "EnvCumulCell")).join('')}
+              <Cell ss:StyleID="EnvTotalRow"><Data ss:Type="String"></Data></Cell>
+          </Row>\n`;
+      });
+
+      // Ligne de Grand Total à la fin
+      rows3 += `<Row ss:StyleID="GrandTotalRow">
+          <Cell ss:StyleID="GrandTotalCell"><Data ss:Type="String">TOTAL</Data></Cell>
+          <Cell ss:StyleID="GrandTotalCell"><Data ss:Type="String"></Data></Cell>
+          ${formatCell(grandTotalBudget, "GrandTotalCell")}
+          ${formatCell(grandTotalCumul, "GrandTotalCell")}
+          ${grandTotalMonthly.map(val => formatCell(val, "GrandTotalCell")).join('')}
+          <Cell ss:StyleID="GrandTotalCell"><Data ss:Type="String"></Data></Cell>
+      </Row>\n`;
+
+      // Assemblage du fichier Excel au format Spreadsheet 2003 XML avec Styles intégrés
+      const xml = `<?xml version="1.0"?>
+      <?mso-application progid="Excel.Sheet"?>
+      <Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" 
+                xmlns:o="urn:schemas-microsoft-com:office:office" 
+                xmlns:x="urn:schemas-microsoft-com:office:excel" 
+                xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">
+        <Styles>
+          <Style ss:ID="Header">
+            <Font ss:Bold="1" ss:Color="#FFFFFF"/>
+            <Interior ss:Color="#4F81BD" ss:Pattern="Solid"/>
+            <Alignment ss:Horizontal="Center" ss:Vertical="Center"/>
+          </Style>
+          <Style ss:ID="HeaderSub">
+            <Font ss:Bold="1" ss:Color="#FFFFFF"/>
+            <Interior ss:Color="#5B9BD5" ss:Pattern="Solid"/>
+            <Alignment ss:Horizontal="Center" ss:Vertical="Center"/>
+          </Style>
+          <Style ss:ID="Currency">
+            <NumberFormat ss:Format="#,##0.00\\ &quot;€&quot;"/>
+          </Style>
+          <Style ss:ID="BoldCurrency">
+            <Font ss:Bold="1"/>
+            <NumberFormat ss:Format="#,##0.00\\ &quot;€&quot;"/>
+          </Style>
+          <Style ss:ID="CurrencyGray">
+            <Interior ss:Color="#F2F2F2" ss:Pattern="Solid"/>
+            <NumberFormat ss:Format="#,##0.00\\ &quot;€&quot;"/>
+          </Style>
+          <Style ss:ID="CurrencyGreen">
+            <Font ss:Color="#006100"/>
+            <Interior ss:Color="#C6EFCE" ss:Pattern="Solid"/>
+            <NumberFormat ss:Format="#,##0.00\\ &quot;€&quot;"/>
+          </Style>
+          <Style ss:ID="CurrencyRed">
+            <Font ss:Color="#9C0006"/>
+            <Interior ss:Color="#FFC7CE" ss:Pattern="Solid"/>
+            <NumberFormat ss:Format="#,##0.00\\ &quot;€&quot;"/>
+          </Style>
+          <Style ss:ID="BoldCurrencyBlue">
+            <Font ss:Bold="1" ss:Color="#FFFFFF"/>
+            <Interior ss:Color="#4F81BD" ss:Pattern="Solid"/>
+            <NumberFormat ss:Format="#,##0.00\\ &quot;€&quot;"/>
+          </Style>
+          <Style ss:ID="TotalRow">
+            <Font ss:Bold="1"/>
+            <Interior ss:Color="#D9D9D9" ss:Pattern="Solid"/>
+          </Style>
+          <Style ss:ID="EnvTotalRow">
+            <Interior ss:Color="#EAEAEA" ss:Pattern="Solid"/>
+          </Style>
+          <Style ss:ID="EnvNameCell">
+            <Font ss:Bold="1" ss:Italic="1"/>
+            <Interior ss:Color="#EAEAEA" ss:Pattern="Solid"/>
+          </Style>
+          <Style ss:ID="EnvBudgetCell">
+            <Font ss:Bold="1" ss:Italic="1" ss:Color="#FF9900"/>
+            <NumberFormat ss:Format="#,##0.00\ &quot;€&quot;"/>
+            <Interior ss:Color="#EAEAEA" ss:Pattern="Solid"/>
+          </Style>
+          <Style ss:ID="EnvCumulCell">
+            <Font ss:Bold="1" ss:Italic="1" ss:Color="#2F75B5"/>
+            <NumberFormat ss:Format="#,##0.00\ &quot;€&quot;"/>
+            <Interior ss:Color="#EAEAEA" ss:Pattern="Solid"/>
+          </Style>
+          <Style ss:ID="GrandTotalRow">
+            <Interior ss:Color="#D9D9D9" ss:Pattern="Solid"/>
+          </Style>
+          <Style ss:ID="GrandTotalCell">
+            <Font ss:Bold="1" ss:Size="11"/>
+            <NumberFormat ss:Format="#,##0.00\ &quot;€&quot;"/>
+            <Interior ss:Color="#D9D9D9" ss:Pattern="Solid"/>
+          </Style>
+        </Styles>
+        <Worksheet ss:Name="saisie dépense">
+          <Table>
+            <Column ss:Width="100"/>
+            <Column ss:Width="120"/>
+            <Column ss:Width="200"/>
+            <Column ss:Width="90"/>
+            <Column ss:Width="150"/>
+            <Column ss:Width="150"/>
+            <Column ss:Width="80"/>
+            ${rows1}
+          </Table>
+        </Worksheet>
+        <Worksheet ss:Name="suivie mensuel">
+          <Table>
+            <Column ss:Width="180"/>
+            <Column ss:Width="100"/>
+            ${Array(36).fill('<Column ss:Width="85"/>').join('\n            ')}
+            ${rows2}
+          </Table>
+        </Worksheet>
+        <Worksheet ss:Name="envellope">
+          <Table>
+            <Column ss:Width="200"/>
+            <Column ss:Width="150"/>
+            <Column ss:Width="120"/>
+            <Column ss:Width="120"/>
+            ${Array(12).fill('<Column ss:Width="85"/>').join('\n            ')}
+            <Column ss:Width="150"/>
+            ${rows3}
+          </Table>
+        </Worksheet>
+      </Workbook>`;
+
+      const blob = new Blob([xml], { type: 'application/vnd.ms-excel;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.setAttribute("href", url);
+      // Le fichier portera le même nom que votre matrice originelle
+      link.setAttribute("download", `Budget_DocCity_Marseille_${selectedYear}.xls`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    };
+
+    return (
+      <div className="space-y-6 animate-fade-in">
+        <div className="bg-white p-8 rounded-xl border shadow-sm flex flex-col items-center justify-center text-center h-[50vh]">
+          <FileText size={56} className="text-green-600 mb-6" />
+          <h2 className="font-bold text-2xl mb-3 text-gray-800">Exportation du Budget {selectedYear}</h2>
+          <p className="text-gray-500 mb-8 max-w-lg text-sm">
+            Générez un véritable fichier Excel formaté, comprenant les onglets <b>saisie dépense</b>, <b>suivie mensuel</b> et <b>envellope</b> avec leurs cellules adaptées et formats monétaires inclus.
+          </p>
+          <button 
+            onClick={handleExportMultiTab}
+            className="px-8 py-3.5 bg-green-600 text-white font-bold rounded-xl hover:bg-green-700 flex items-center gap-3 shadow-md transition-all active:scale-95"
+          >
+            <Download size={22} />
+            Télécharger le fichier Excel
+          </button>
         </div>
       </div>
     );
@@ -1463,22 +1758,23 @@ export default function App() {
             </div>
 
             <div className="bg-white px-4 py-2 rounded-xl border flex items-center gap-4 shadow-sm">
-              <div className="text-right leading-tight">
+              <div className="text-right leading-tight hidden sm:block">
                 <p className="text-sm font-bold text-gray-800">{currentUser.name}</p>
                 <p className="text-xs text-blue-600 font-semibold">{currentUser.role}</p>
               </div>
-              <button onClick={() => setCurrentUser(null)} className="text-gray-400 hover:text-red-600 hover:bg-red-50 p-2 rounded-lg transition-colors"><LogOut size={20} /></button>
+              <button onClick={() => setCurrentUser(null)} className="text-gray-400 hover:text-red-600 hover:bg-red-50 p-2 rounded-lg transition-colors" title="Se déconnecter"><LogOut size={20} /></button>
             </div>
           </div>
         </header>
 
-        <nav className="flex gap-2 mb-6 overflow-x-auto pb-2 scrollbar-hide">
+        <nav className="flex gap-2 mb-6 overflow-x-auto pb-2 flex-nowrap shrink-0">
           {[
             { id: 'saisie', label: 'Saisie Dépenses', icon: <Plus size={18} /> },
             { id: 'import', label: 'Import CSV', icon: <Upload size={18} /> },
             { id: 'suivi', label: 'Suivi Mensuel', icon: <Search size={18} /> },
             { id: 'enveloppes', label: 'Matrice & Plafonds', icon: <Download size={18} /> },
             { id: 'configuration', label: 'Configuration', icon: <Settings size={18} /> },
+            { id: 'export', label: 'Export CSV', icon: <FileText size={18} /> },
             ...(currentUser.role === 'Administrateur' ? [{ id: 'admin', label: 'Administration', icon: <User size={18} /> }] : [])
           ].map(t => (
             <button key={t.id} onClick={() => setActiveTab(t.id)} className={`flex items-center gap-2 whitespace-nowrap px-5 py-3 rounded-xl font-bold transition-all ${activeTab === t.id ? 'bg-blue-700 text-white shadow-md' : 'bg-white text-gray-600 border border-gray-200 hover:bg-blue-50 hover:text-blue-700 shadow-sm'}`}>
@@ -1493,6 +1789,7 @@ export default function App() {
           {activeTab === 'suivi' && <SuiviTab />}
           {activeTab === 'enveloppes' && <EnveloppesTab />}
           {activeTab === 'configuration' && <ConfigurationTab />}
+          {activeTab === 'export' && <ExportTab />}
           {activeTab === 'admin' && <AdministrationTab />}
         </main>
       </div>
