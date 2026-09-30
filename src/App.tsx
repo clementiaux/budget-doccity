@@ -8,7 +8,6 @@ import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, doc, setDoc, updateDoc, deleteDoc, onSnapshot, collection, addDoc } from 'firebase/firestore';
 
-// Environment fallback to user's config
 const firebaseConfig = typeof __firebase_config !== 'undefined' 
   ? JSON.parse(__firebase_config) 
   : {
@@ -137,7 +136,9 @@ export default function App() {
   const [loginError, setLoginError] = useState(false);
   const [firebaseUser, setFirebaseUser] = useState(null);
   const [isDBReady, setIsDBReady] = useState(false);
-  const [usersConfig, setUsersConfig] = useState({ users: [], pending: [] });
+  
+  // Configuration utilisateurs avec support de suppression globale
+  const [usersConfig, setUsersConfig] = useState({ users: [], pending: [], deletedUsers: [] });
   
   const [isRegistering, setIsRegistering] = useState(false);
   const [regName, setRegName] = useState('');
@@ -162,6 +163,14 @@ export default function App() {
     { email: 'finance@doc-city.fr', password: 'Doccityviton2026', name: 'Direction', role: 'Administrateur' },
     { email: 'compta@doccity.fr', password: 'doccity2026', name: 'Service Comptabilité', role: 'Éditeur' }
   ];
+
+  // Calcul dynamique des utilisateurs actifs en tenant compte de la liste de suppression
+  const activeUsers = useMemo(() => {
+    return [
+      ...allowedUsers.filter(u => !(usersConfig.deletedUsers || []).includes(u.email)),
+      ...(usersConfig.users || [])
+    ];
+  }, [usersConfig]);
 
   useEffect(() => {
     const initAuth = async () => {
@@ -210,7 +219,7 @@ export default function App() {
       if (docSnap.exists()) {
         setUsersConfig(docSnap.data());
       } else {
-        setDoc(usersAuthRef, { users: [], pending: [] });
+        setDoc(usersAuthRef, { users: [], pending: [], deletedUsers: [] });
       }
     }, (error) => console.error("Users config fetch error:", error));
 
@@ -1370,9 +1379,18 @@ export default function App() {
 
     const executeDeleteUser = async (email) => {
       if (!firebaseUser) return;
+      
       const newUsers = (usersConfig.users || []).filter(u => u.email !== email);
+      
+      const newDeleted = [...(usersConfig.deletedUsers || [])];
+      // Si on supprime un utilisateur "en dur", on l'ajoute à la liste des supprimés
+      if (!newDeleted.includes(email) && allowedUsers.some(u => u.email === email)) {
+        newDeleted.push(email);
+      }
+
       await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'config', 'users_auth'), {
-        users: newUsers
+        users: newUsers,
+        deletedUsers: newDeleted
       });
       setUserToDelete(null);
     };
@@ -1393,6 +1411,7 @@ export default function App() {
             {(!usersConfig.pending || usersConfig.pending.length === 0) && <p className="text-gray-500 italic text-sm">Aucune demande en attente.</p>}
           </div>
         </div>
+        
         <div className="bg-white p-6 rounded-xl border shadow-sm">
           <h2 className="font-bold text-lg mb-4 text-blue-900">Utilisateurs autorisés</h2>
           <table className="w-full text-sm text-left">
@@ -1405,21 +1424,17 @@ export default function App() {
               </tr>
             </thead>
             <tbody>
-              {allowedUsers.map(u => (
-                <tr key={u.email} className="border-b bg-gray-50">
-                  <td className="p-3 font-semibold">{u.name}</td>
-                  <td className="p-3">{u.email}</td>
-                  <td className="p-3 font-bold text-blue-800">{u.role}</td>
-                  <td className="p-3 text-center text-xs text-gray-400 italic font-semibold">Système</td>
-                </tr>
-              ))}
-              {usersConfig.users?.map((u, i) => (
+              {activeUsers.map((u, i) => {
+                const isMe = u.email === currentUser?.email;
+                return (
                 <tr key={i} className="border-b hover:bg-gray-50">
                   <td className="p-3 font-semibold">{u.name}</td>
                   <td className="p-3">{u.email}</td>
-                  <td className="p-3 font-bold text-green-800">{u.role}</td>
+                  <td className={`p-3 font-bold ${u.role === 'Administrateur' ? 'text-blue-800' : 'text-green-800'}`}>{u.role}</td>
                   <td className="p-3 text-center">
-                    {userToDelete === u.email ? (
+                    {isMe ? (
+                      <span className="text-xs text-gray-400 italic font-semibold">Vous</span>
+                    ) : userToDelete === u.email ? (
                       <div className="flex justify-center items-center gap-1">
                         <span className="text-[10px] text-red-600 font-bold hidden sm:inline-block mr-1">Supprimer?</span>
                         <button onClick={() => executeDeleteUser(u.email)} className="bg-red-600 text-white p-1.5 rounded hover:bg-red-700 transition-colors"><Trash2 size={16} /></button>
@@ -1430,7 +1445,7 @@ export default function App() {
                     )}
                   </td>
                 </tr>
-              ))}
+              )})}
             </tbody>
           </table>
         </div>
@@ -1657,12 +1672,12 @@ export default function App() {
           </Style>
           <Style ss:ID="EnvBudgetCell">
             <Font ss:Bold="1" ss:Italic="1" ss:Color="#FF9900"/>
-            <NumberFormat ss:Format="#,##0.00\ &quot;€&quot;"/>
+            <NumberFormat ss:Format="#,##0.00\\ &quot;€&quot;"/>
             <Interior ss:Color="#EAEAEA" ss:Pattern="Solid"/>
           </Style>
           <Style ss:ID="EnvCumulCell">
             <Font ss:Bold="1" ss:Italic="1" ss:Color="#2F75B5"/>
-            <NumberFormat ss:Format="#,##0.00\ &quot;€&quot;"/>
+            <NumberFormat ss:Format="#,##0.00\\ &quot;€&quot;"/>
             <Interior ss:Color="#EAEAEA" ss:Pattern="Solid"/>
           </Style>
           <Style ss:ID="GrandTotalRow">
@@ -1670,7 +1685,7 @@ export default function App() {
           </Style>
           <Style ss:ID="GrandTotalCell">
             <Font ss:Bold="1" ss:Size="11"/>
-            <NumberFormat ss:Format="#,##0.00\ &quot;€&quot;"/>
+            <NumberFormat ss:Format="#,##0.00\\ &quot;€&quot;"/>
             <Interior ss:Color="#D9D9D9" ss:Pattern="Solid"/>
           </Style>
         </Styles>
@@ -1744,7 +1759,7 @@ export default function App() {
         <div className="bg-white p-8 rounded-2xl shadow-xl max-w-sm w-full border-t-8 border-t-blue-600">
           <div className="text-center mb-8"><User size={48} className="text-blue-600 mx-auto mb-4" /><h1 className="text-2xl font-extrabold text-blue-900">Doccity Budget</h1></div>
           {!isRegistering ? (
-            <form onSubmit={(e) => { e.preventDefault(); const user = [...allowedUsers, ...(usersConfig.users || [])].find(u => String(u.email).toLowerCase() === String(loginEmail).toLowerCase().trim() && u.password === loginPassword); if (user) { setCurrentUser(user); setLoginError(false); } else setLoginError(true); }} className="space-y-4">
+            <form onSubmit={(e) => { e.preventDefault(); const user = activeUsers.find(u => String(u.email).toLowerCase() === String(loginEmail).toLowerCase().trim() && u.password === loginPassword); if (user) { setCurrentUser(user); setLoginError(false); } else setLoginError(true); }} className="space-y-4">
               <input type="email" placeholder="Email" className="w-full p-3 border rounded-xl bg-gray-50 outline-none focus:border-blue-500 focus:bg-white transition-all" value={loginEmail} onChange={(e) => setLoginEmail(e.target.value)} required autoFocus />
               <input type="password" placeholder="Mot de passe" className="w-full p-3 border rounded-xl bg-gray-50 outline-none focus:border-blue-500 focus:bg-white transition-all" value={loginPassword} onChange={(e) => setLoginPassword(e.target.value)} required />
               {loginError && <p className="text-red-500 text-xs text-center font-bold bg-red-50 p-2 rounded">Identifiants incorrects</p>}
