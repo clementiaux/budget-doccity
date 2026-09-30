@@ -1366,7 +1366,19 @@ export default function App() {
   };
 
   const AdministrationTab = () => {
+    const [userToDelete, setUserToDelete] = useState(null);
+
+    const executeDeleteUser = async (email) => {
+      if (!firebaseUser) return;
+      const newUsers = (usersConfig.users || []).filter(u => u.email !== email);
+      await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'config', 'users_auth'), {
+        users: newUsers
+      });
+      setUserToDelete(null);
+    };
+
     if (currentUser?.role !== 'Administrateur') return <div className="p-6 bg-red-50 text-red-600 rounded-lg font-bold text-center">Accès refusé. Réservé à l'administrateur.</div>;
+    
     return (
       <div className="space-y-6 animate-fade-in">
         <div className="bg-white p-6 rounded-xl border shadow-sm">
@@ -1384,10 +1396,41 @@ export default function App() {
         <div className="bg-white p-6 rounded-xl border shadow-sm">
           <h2 className="font-bold text-lg mb-4 text-blue-900">Utilisateurs autorisés</h2>
           <table className="w-full text-sm text-left">
-            <thead className="bg-gray-100"><tr><th className="p-3">Nom</th><th className="p-3">Email</th><th className="p-3">Rôle</th></tr></thead>
+            <thead className="bg-gray-100">
+              <tr>
+                <th className="p-3">Nom</th>
+                <th className="p-3">Email</th>
+                <th className="p-3">Rôle</th>
+                <th className="p-3 text-center">Actions</th>
+              </tr>
+            </thead>
             <tbody>
-              {allowedUsers.map(u => (<tr key={u.email} className="border-b bg-gray-50"><td className="p-3 font-semibold">{u.name}</td><td className="p-3">{u.email}</td><td className="p-3 font-bold text-blue-800">{u.role}</td></tr>))}
-              {usersConfig.users?.map((u, i) => (<tr key={i} className="border-b hover:bg-gray-50"><td className="p-3 font-semibold">{u.name}</td><td className="p-3">{u.email}</td><td className="p-3 font-bold text-green-800">{u.role}</td></tr>))}
+              {allowedUsers.map(u => (
+                <tr key={u.email} className="border-b bg-gray-50">
+                  <td className="p-3 font-semibold">{u.name}</td>
+                  <td className="p-3">{u.email}</td>
+                  <td className="p-3 font-bold text-blue-800">{u.role}</td>
+                  <td className="p-3 text-center text-xs text-gray-400 italic font-semibold">Système</td>
+                </tr>
+              ))}
+              {usersConfig.users?.map((u, i) => (
+                <tr key={i} className="border-b hover:bg-gray-50">
+                  <td className="p-3 font-semibold">{u.name}</td>
+                  <td className="p-3">{u.email}</td>
+                  <td className="p-3 font-bold text-green-800">{u.role}</td>
+                  <td className="p-3 text-center">
+                    {userToDelete === u.email ? (
+                      <div className="flex justify-center items-center gap-1">
+                        <span className="text-[10px] text-red-600 font-bold hidden sm:inline-block mr-1">Supprimer?</span>
+                        <button onClick={() => executeDeleteUser(u.email)} className="bg-red-600 text-white p-1.5 rounded hover:bg-red-700 transition-colors"><Trash2 size={16} /></button>
+                        <button onClick={() => setUserToDelete(null)} className="bg-gray-200 text-gray-700 p-1.5 rounded hover:bg-gray-300 transition-colors"><X size={16} /></button>
+                      </div>
+                    ) : (
+                      <button onClick={() => setUserToDelete(u.email)} className="text-gray-400 hover:text-red-600 bg-gray-100 hover:bg-red-50 p-1.5 rounded transition-colors" title="Révoquer l'accès"><Trash2 size={16} /></button>
+                    )}
+                  </td>
+                </tr>
+              ))}
             </tbody>
           </table>
         </div>
